@@ -16,6 +16,7 @@ using Sockets
 using Serialization
 using StaticArrays
 using DifferentialEquations
+using Zygote
 
 include("view_car.jl")
 include("objects.jl")
@@ -25,6 +26,7 @@ include("control.jl")
 include("sink.jl")
 include("measurements.jl")
 include("map.jl")
+include("localization.jl")
 
 export server, shutdown!, keyboard_client
 

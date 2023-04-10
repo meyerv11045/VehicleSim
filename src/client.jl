@@ -39,7 +39,7 @@ function keyboard_client(host::IPAddr=IPv4(0), port=4444; v_step = 1.0, s_step =
         end
   #      @info "Measurements received: $num_gt gt; $num_cam cam; $num_imu imu; $num_gps gps"
     end
-    
+
     target_velocity = 0.0
     steering_angle = 0.0
     controlled = true
@@ -82,7 +82,7 @@ function example_client(host::IPAddr=IPv4(0), port=4444)
     @async while isopen(socket)
         state_msg = deserialize(socket)
     end
-   
+
     shutdown = false
     persist = true
     while isopen(socket)
@@ -93,7 +93,7 @@ function example_client(host::IPAddr=IPv4(0), port=4444)
             persist = false
         end
         cmd = VehicleCommand(0.0, 2.5, persist, shutdown)
-        serialize(socket, cmd) 
+        serialize(socket, cmd)
     end
 
 end
