@@ -83,6 +83,7 @@ We haven't discussed quaternions in class much, but interfacing with GPS/IMU
 will be much easier using this representation, which is used internally by the simulator.
 """
 function rigid_body_dynamics(position, quaternion, velocity, angular_vel, Δt)
+    # quaternion update
     r = angular_vel
     mag = norm(r)
 
@@ -123,16 +124,16 @@ end
 
 function get_gps_transform()
     # TODO load this from URDF
-    R_gps_to_body = one(RotMatrix{3, Float64})
-    t_gps_to_body = [-3.0, 1, 2.6]
-    T = [R_gps_to_body t_gps_to_body]
+    R_gps_in_body = one(RotMatrix{3, Float64})
+    t_gps_in_body = [-3.0, 1, 2.6]
+    T = [R_gps_in_body t_gps_in_body]
 end
 
 function get_imu_transform()
-    R_imu_to_body = RotY(0.02)
-    t_imu_to_body = [0, 0, 0.7]
+    R_imu_in_body = RotY(0.02)
+    t_imu_in_body = [0, 0, 0.7]
 
-    T = [R_imu_to_body t_imu_to_body]
+    T = [R_imu_in_body t_imu_in_body]
 end
 
 function get_body_transform(quat, loc)
@@ -152,7 +153,7 @@ T = T1 * T2
 i.e. apply T2 then T1
 """
 function multiply_transforms(T1, T2)
-    T1f = [T1; [0 0 0 1.]] 
+    T1f = [T1; [0 0 0 1.]]
     T2f = [T2; [0 0 0 1.]]
 
     T = T1f * T2f
@@ -250,7 +251,7 @@ function cameras(vehicles, state_channels, cam_channels; max_rate=10.0, focal_le
         tnow = time()
         if tnow - t > min_Δ
             t = tnow
-            for i = 1:num_vehicles             
+            for i = 1:num_vehicles
                 bboxes = []
                 ego_state = states[i]
                 T_world_body = get_body_transform(ego_state.q[1:4], ego_state.q[5:7])
@@ -259,7 +260,7 @@ function cameras(vehicles, state_channels, cam_channels; max_rate=10.0, focal_le
                 T_camrot1_world = invert_transform(T_world_camrot1)
                 T_camrot2_world = invert_transform(T_world_camrot2)
                 for (camera_id, transform) in zip((1,2), (T_camrot1_world, T_camrot2_world))
-                    
+
                     for j = 1:num_vehicles
                         j == i && continue
                         other_vehicle_corners = [transform * [pt;1] for pt in corners_body[j]]
@@ -284,7 +285,7 @@ function cameras(vehicles, state_channels, cam_channels; max_rate=10.0, focal_le
                         if top ≈ bot || left ≈ right || top > bot || left > right
                             # out of frame
                             continue
-                        else 
+                        else
                             top = convert_to_pixel(image_height, pixel_len, top)
                             bot = convert_to_pixel(image_height, pixel_len, bot)
                             left = convert_to_pixel(image_width, pixel_len, left)
@@ -300,7 +301,7 @@ function cameras(vehicles, state_channels, cam_channels; max_rate=10.0, focal_le
     end
 end
 
-function ground_truth(vehicles, state_channels, gt_channels; max_rate=20.0) 
+function ground_truth(vehicles, state_channels, gt_channels; max_rate=20.0)
     min_Δ = 1.0/max_rate
     t = time()
     num_vehicles = length(vehicles)
@@ -311,10 +312,10 @@ function ground_truth(vehicles, state_channels, gt_channels; max_rate=20.0)
         tnow = time()
         if tnow - t > min_Δ
             t = tnow
-            measurements = [GroundTruthMeasurement(t, i, 
-                                                   states[i].q[5:7], 
-                                                   states[i].q[1:4], 
-                                                   states[i].v[4:6], 
+            measurements = [GroundTruthMeasurement(t, i,
+                                                   states[i].q[5:7],
+                                                   states[i].q[1:4],
+                                                   states[i].v[4:6],
                                                    states[i].v[1:3],
                                                    vehicle_size) for i = 1:num_vehicles]
             for i = 1:num_vehicles
@@ -325,9 +326,9 @@ function ground_truth(vehicles, state_channels, gt_channels; max_rate=20.0)
 end
 
 function measure_vehicles(map,
-        vehicles, 
-        state_channels, 
-        meas_channels, 
+        vehicles,
+        state_channels,
+        meas_channels,
         shutdown_channel;
         measure_gps = true,
         measure_imu = true,
@@ -335,10 +336,10 @@ function measure_vehicles(map,
         measure_gt = true,
         rng=MersenneTwister(1)
     )
-    
+
     target_segments = identify_loading_segments(map)
 
- 
+
     num_vehicles = length(state_channels)
     @assert num_vehicles == length(meas_channels)
 
@@ -346,7 +347,7 @@ function measure_vehicles(map,
     imu_channels = [Channel{IMUMeasurement}(32) for _ in 1:num_vehicles]
     cam_channels = [Channel{CameraMeasurement}(32) for _ in 1:num_vehicles]
     gt_channels = [Channel{GroundTruthMeasurement}(32) for _ in 1:num_vehicles]
-    
+
     shutdown = false
     @async while true
         if isready(shutdown_channel)
@@ -360,7 +361,7 @@ function measure_vehicles(map,
         end
         sleep(0.1)
     end
-    
+
     target_channels = [Channel{Int}(1) for _ in 1:num_vehicles]
     # Fixed target segments for now.
     for id in 1:num_vehicles
@@ -375,7 +376,7 @@ function measure_vehicles(map,
         # Intrinsic Measurements
         measure_gps && @async gps(vehicles[id], state_channels[id], gps_channels[id])
         measure_imu && @async imu(vehicles[id], state_channels[id], imu_channels[id])
- 
+
         let id=id
             @async begin
                 gps_measurements = GPSMeasurement[]
@@ -405,7 +406,7 @@ function measure_vehicles(map,
                         if L > 20
                             deleteat!(meas_list, 1:L)
                         end
-                    end 
+                    end
                 end
             end
         end

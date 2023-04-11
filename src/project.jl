@@ -1,5 +1,5 @@
+# for estimating the other vehicles
 struct SimpleVehicleState
-    # for estimating the other vehicles
     p1::Float64
     p2::Float64
     θ::Float64
@@ -8,24 +8,16 @@ struct SimpleVehicleState
     h::Float64
 end
 
+# for use with the ego vehicles
 struct FullVehicleState
-    # for use with the ego vehicles
-    p1::Float64
-    p2::Float64
-    p3::Float64
-    roll::Float64
-    pitch::Float64
-    yaw::Float64
-    v1::Float64
-    v2::Float64
-    v3::Float64
-    w_roll::Float64
-    w_pitch::Float64
-    w_yaw::Float64
+    position::SVector{3, Float64}
+    quaternion::SVector{4, Float64}
+    linear_vel::SVector{3, Float64}
+    angular_vel::SVector{3, Float64}
 end
 
 struct LocalizationEstimate
-    last_update::DateTime
+    last_update::Float64
     x::FullVehicleState
 end
 
@@ -43,9 +35,9 @@ function localize(gps_channel, imu_channel, localization_state_channel)
     # Process noise covariance
     Q = Diagonal(0.01*ones(12))
 
-    # Measurement noise covariance
-    imu_variance = Diagonal(0.1*ones(6))
-    gps_variance = Diagonal(0.1*ones(2))
+    # Measurement noise covariance (taken from the generator functions)
+    imu_variance = Diagonal([0.01, 0.01, 0.01, 0.01, 0.01, 0.01].^2)
+    gps_variance = Diagonal([1.0, 1.0].^2)
     if is_gps_measurement
         R = gps_variance
     else
