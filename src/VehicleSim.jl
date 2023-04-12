@@ -27,7 +27,8 @@ include("sink.jl")
 include("measurements.jl")
 include("map.jl")
 include("localization.jl")
+include("project.jl")
 
-export server, shutdown!, keyboard_client
+export server, shutdown!, keyboard_client, my_client
 
 end
