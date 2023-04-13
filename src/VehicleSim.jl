@@ -17,6 +17,8 @@ using Serialization
 using StaticArrays
 using DifferentialEquations
 using Zygote
+using DataStructures
+using PolygonInbounds
 
 include("view_car.jl")
 include("objects.jl")
@@ -28,6 +30,7 @@ include("measurements.jl")
 include("map.jl")
 include("localization.jl")
 include("project.jl")
+include("shortestpath.jl")
 
 export server, shutdown!, keyboard_client, my_client
 
