@@ -81,6 +81,22 @@ function localize(gps_channel, imu_channel, localization_state_channel)
 end
 
 function perception(cam_meas_channel, localization_state_channel, perception_state_channel)
+    # h(x): Everything here is in pixel space
+    # Step 1: Process Model (Loop through perception_state_channel and predict where cars will be in future)
+    # Step 2: Transform Resulting future states to image frame
+    # Step 3: Run the get_3d_bbox_corners thing to get the bounding box corners for each one
+    # Step 4: Pull measurement bounding boxes by getting most recent neasurement from cam1 and cam 2
+    # Step 5: Go through each measurement bounding box, and see which future state car is closest: each measurement has a car
+    # Step 6: Check to make sure those errors from previous step are reasonable (don't wanna have an instance where we had a car leave frame and enter frame in same timestep and that the mapping is super off)
+    # Step 7: If we have extra cars in vehicle state, pop them off because tha car has left the frame
+    # Step 8: If we have extra BB Measurements, then we will calculate vehicle state as the following: Find center of bounding box measurments, and apply transform from image to body frame, and store that as new vehicle state
+    # Step 9: Run EKF for the rest of them to calculate their vehicle states
+
+    # Easy perception
+    # Clear current perception list
+    # Pull most recent camera measurements from cam1 and cam2
+    # Loop through each bounding box, find center of vehicle in image frame and multiply by body transform
+    # Store vehicle in perception state list, but have vehicle be 1.5x
     # set up stuff
     while true
         fresh_cam_meas = []
