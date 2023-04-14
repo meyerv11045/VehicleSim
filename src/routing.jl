@@ -1,4 +1,4 @@
-function makeHeap(map, heap_handles, road_min_heap, dist_vals)
+function populate_heap!(map, heap_handles, road_min_heap, dist_vals)
     for road_segment in map # road_segment is a Pair: [road_id, RoadSegment]
         road_id = road_segment[1]
 
@@ -22,7 +22,7 @@ function shortest_path(start_road_ID, end_road_ID, map)
     road_min_heap = MutableBinaryMinHeap{Vector{Any}}() # each heap node is [distance value, road ID]
     parent_road = Dict{Int, Int}() # key: road ID, value: parent road
 
-    makeHeap(map, heap_handles, road_min_heap, dist_vals)
+    populate_heap!(map, heap_handles, road_min_heap, dist_vals)
     update!(road_min_heap, heap_handles[start_road_ID], [0, start_road_ID])
     dist_vals[start_road_ID] = 0
 
@@ -128,11 +128,11 @@ function cur_map_segment_of_vehicle(position, map)
             end
         end
     end
-    return 0
+    @warn "vehicle at $position is not on the road"
+    return nothing # vehicle off the road
 end
 
-
-function find_side_of_road(latest_localization_state, current_road_id, map)
+function find_side_of_road(position, current_road_id, map)
     current_road_segment = map[current_road_id]
     road_boundaries = current_road_segment.lane_boundaries
 
@@ -165,14 +165,14 @@ function find_side_of_road(latest_localization_state, current_road_id, map)
     right_road_vertices = vcat(right_road_vertices, pt_b2')
 
     if road_boundaries[1].curvature == 0 # for straight roads
-        if inpoly2(latest_localization_state[1:2], right_road_vertices, polygon_edges)[2] == 1 && inpoly2(latest_localization_state[1:2], left_road_vertices, polygon_edges)[2] == 1
+        if inpoly2(position, right_road_vertices, polygon_edges)[2] == 1 && inpoly2(position, left_road_vertices, polygon_edges)[2] == 1
             return "middle"
-        elseif inpoly2(latest_localization_state[1:2], left_road_vertices, polygon_edges)[1] == 1
+        elseif inpoly2(position, left_road_vertices, polygon_edges)[1] == 1
             return "left"
-        elseif inpoly2(latest_localization_state[1:2], right_road_vertices, polygon_edges)[1] == 1
+        elseif inpoly2(position, right_road_vertices, polygon_edges)[1] == 1
             return "right"
         else
-            return "error"        
+            return "error"
         end
     else # for curved roads
         min_radius = minimum([abs(1 / road_boundaries[1].curvature), abs(1 / road_boundaries[2].curvature)])
@@ -187,7 +187,7 @@ function find_side_of_road(latest_localization_state, current_road_id, map)
             center_point = [pt_b1[1], pt_a1[2]]
         end
 
-        dist_from_center = norm(latest_localization_state[1:2] - center_point)
+        dist_from_center = norm(position - center_point)
 
         if abs(dist_from_center - mid_radius) < 0.00001
             return "middle"
@@ -201,5 +201,4 @@ function find_side_of_road(latest_localization_state, current_road_id, map)
             return "error"
         end
     end
-
 end

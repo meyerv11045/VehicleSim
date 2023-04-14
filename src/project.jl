@@ -117,10 +117,13 @@ function decision_making(localization_state_channel,
         map,
         socket)
     @info "Starting decision making task..."
+
+    steering_angle = 0.0
+    target_velocity = 2.0
+
     while true
         sleep(0.001) # prevent thread from hogging resources & freezing other threads
         isready(shutdown_channel) && break
-<<<<<<< HEAD
 
         target_road_segment_id = take!(target_road_segment_channel)
 
@@ -129,74 +132,43 @@ function decision_making(localization_state_channel,
         # position = localization_state.x.position[1:2] # localization estimate
 
         cur_road_segment_id = cur_map_segment_of_vehicle(position, map)
-        @info "Current road segment: $cur_road_segment_id"
-        position_on_road = find_side_of_road(position, cur_road_segment_id, map)
-        route = shortest_path(cur_road_segment_id, target_road_segment_id, map)
 
+        route = shortest_path(cur_road_segment_id, target_road_segment_id, map)
         @info "Route from $cur_road_segment_id to $target_road_segment_id calculated."
         @info "Following the calculated route $route"
 
-        cur_road_segment_id = popfirst!(route)
-
-        steering_angle = 0.0
-        target_velocity = 1.0
-
-        while !isempty(route)
-=======
-
-        target_road_segment_id = take!(target_road_segment_channel)
-
-        localization_state = fetch(localization_state_channel)
-        position = localization_state.position[1:2] # ground truth for testing
-        # position = localization_state.x.position[1:2] # localization estimate
-
-        cur_road_segment_id = cur_map_segment_of_vehicle(position, map)
-        @info "Current road segment: $cur_road_segment_id"
-        route = shortest_path(cur_road_segment_id, target_road_segment_id, map)
-
-        @info "Route from $cur_road_segment_id to $target_road_segment_id calculated."
-        @info "Following the calculated route $route"
-
-        while cur_road_segment_id != target_road_segment_id
->>>>>>> main
+        while !isnothing(cur_road_segment_id) && cur_road_segment_id != target_road_segment_id
             # slower checking since we aren't changing road segments that often
-            sleep(0.1) # prevent thread from hogging resources & freezing other threads
+            sleep(0.1)
 
             localization_state = fetch(localization_state_channel)
             position = localization_state.position[1:2] # ground truth for testing
             # position = localization_state.x.position[1:2] # localization estimate
-<<<<<<< HEAD
-            if position_on_road == "error"
-                cur_road_segment_id = popfirst!(route)
-            end
+            cur_road_segment_id = cur_map_segment_of_vehicle(position, map)
 
             position_on_road = find_side_of_road(position, cur_road_segment_id, map)
 
-            if (position_on_road == "right")
-                steering_angle -= pi / 10
-            elseif (position_on_road == "left")
-                steering_angle += pi / 10
+            # TODO: add in logic that changes the steering to follow the route
+            if position_on_road == "right"
+                steering_angle -= π/10
+            elseif position_on_road == "left"
+                steering_angle += π/10
+            else # error
+                cur_road_segment_id = popfirst!(route)
             end
 
-            # TODO: motion planning to follow the route
-            # cmd = follow_route(route, cur_road_segment_id, map)
-            cmd = [steering_angle, target_velocity, true]
+            # TODO: add in perception to stop vehicle if car in front on same segment
+
+            cmd = VehicleCommand(steering_angle, target_velocity, true)
             serialize(socket, cmd)
         end
-        if (cur_road_segment_id == target_road_segment_id)
+        if cur_road_segment_id == target_road_segment_id
             @info "Reached target: $target_road_segment_id."
+        elseif isnothing(cur_road_segment_id)
+            @warn "Vehicle is not on any road segment!"
         else
             @info "Target not reached!"
         end
-=======
-            cur_road_segment_id = cur_map_segment_of_vehicle(position, map)
-
-            # TODO: motion planning to follow the route
-            # cmd = follow_route(route, cur_road_segment_id, map)
-            # serialize(socket, cmd)
-        end
-        @info "Reached target: $target_road_segment_id."
->>>>>>> main
     end
     @info "Terminated decision making task."
 end
@@ -228,7 +200,6 @@ function test_algorithms(gt_channel,
                 gt_vehicle_states[id] = meas
             end
         end
-<<<<<<< HEAD
 
         # latest_estimated_ego_state = fetch(localization_state_channel)
         # latest_true_ego_state = gt_vehicle_states[ego_vehicle_id]
@@ -292,71 +263,6 @@ function publish_socket_data_to_channels(socket, gps_channel, imu_channel, cam_c
         # stand in until the server publishes target road segments
         !isfull(target_road_segment_channel) && put!(target_road_segment_channel, 55)
 
-=======
-
-        # latest_estimated_ego_state = fetch(localization_state_channel)
-        # latest_true_ego_state = gt_vehicle_states[ego_vehicle_id]
-        # if latest_estimated_ego_state.last_update < latest_true_ego_state.time - 0.5
-        #     @warn "Localization algorithm stale."
-        # else
-        #     estimated_xyz = latest_estimated_ego_state.position
-        #     true_xyz = latest_true_ego_state.position
-        #     position_error = norm(estimated_xyz - true_xyz)
-        #     t2 = time()
-        #     if t2 - t > 5.0
-        #         @info "Localization position error: $position_error"
-        #         t = t2
-        #     end
-        # end
-
-        # latest_perception_state = fetch(perception_state_channel)
-        # last_perception_update = latest_perception_state.last_update
-        # vehicles = last_perception_state.x
-
-        # for vehicle in vehicles
-        #     xy_position = [vehicle.p1, vehicle.p2]
-        #     closest_id = 0
-        #     closest_dist = Inf
-        #     for (id, gt_vehicle) in gt_vehicle_states
-        #         if id == ego_vehicle_id
-        #             continue
-        #         else
-        #             gt_xy_position = gt_vehicle_position[1:2]
-        #             dist = norm(gt_xy_position-xy_position)
-        #             if dist < closest_dist
-        #                 closest_id = id
-        #                 closest_dist = dist
-        #             end
-        #         end
-        #     end
-        #     paired_gt_vehicle = gt_vehicle_states[closest_id]
-
-        #     # compare estimated to GT
-
-        #     if last_perception_update < paired_gt_vehicle.time - 0.5
-        #         @info "Perception upate stale"
-        #     else
-        #         # compare estimated to true size
-        #         estimated_size = [vehicle.l, vehicle.w, vehicle.h]
-        #         actual_size = paired_gt_vehicle.size
-        #         @info "Estimated size error: $(norm(actual_size-estimated_size))"
-        #     end
-        # end
-    end
-    @info "Terminated testing task."
-end
-
-function publish_socket_data_to_channels(socket, gps_channel, imu_channel, cam_channel, gt_channel, target_road_segment_channel, shutdown_channel)
-    @info "Starting socket data publishing task..."
-
-    while true
-        sleep(0.001) # prevent thread from hogging resources & freezing other threads
-        isready(shutdown_channel) && break
-
-        # stand in until the server publishes target road segments
-        !isfull(target_road_segment_channel) && put!(target_road_segment_channel, 55)
-
->>>>>>> main
         # read to end of the socket stream to ensure you
         # are looking at the latest messages
         local measurement_msg
@@ -389,7 +295,7 @@ function publish_socket_data_to_channels(socket, gps_channel, imu_channel, cam_c
     @info "Terminated socket data publishing task."
 end
 
-function test_client(host::IPAddr=IPv4(0), port=4444; v_step = 1.0, s_step = π/10)
+function test_client(host::IPAddr=IPv4(0), port=4444; v_step = 1.0, s_step = π/10, use_keyboard=true)
     socket = Sockets.connect(host, port)
     (peer_host, peer_port) = getpeername(socket)
     msg = deserialize(socket) # Visualization info
@@ -414,7 +320,9 @@ function test_client(host::IPAddr=IPv4(0), port=4444; v_step = 1.0, s_step = π/
     errormonitor(@async publish_socket_data_to_channels(socket, gps_channel, imu_channel, cam_channel, gt_channel, target_road_segment_channel, shutdown_channel))
     # errormonitor(@async localize(gps_channel, imu_channel, localization_state_channel, shutdown_channel))
     # errormonitor(@asyc perception(cam_channel, localization_state_channel, perception_state_channel, shutdown_channel))
-    errormonitor(@async decision_making(gt_channel, perception_state_channel, target_road_segment_channel, shutdown_channel, map_segments, socket))
+    if !use_keyboard
+        errormonitor(@async decision_making(gt_channel, perception_state_channel, target_road_segment_channel, shutdown_channel, map_segments, socket))
+    end
     errormonitor(@async test_algorithms(gt_channel, localization_state_channel, perception_state_channel, shutdown_channel, ego_vehicle_id))
 
     target_velocity = 0.0
@@ -449,7 +357,9 @@ function test_client(host::IPAddr=IPv4(0), port=4444; v_step = 1.0, s_step = π/
             steering_angle -= s_step
             @info "Target steering angle: $steering_angle"
         end
-        cmd = VehicleCommand(steering_angle, target_velocity, controlled)
-        serialize(socket, cmd)
+        if use_keyboard
+            cmd = VehicleCommand(steering_angle, target_velocity, controlled)
+            serialize(socket, cmd)
+        end
     end
 end
