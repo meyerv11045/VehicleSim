@@ -32,6 +32,6 @@ include("localization.jl")
 include("project.jl")
 include("shortestpath.jl")
 
-export server, shutdown!, keyboard_client, my_client
+export server, shutdown!, keyboard_client, test_client
 
 end

@@ -129,7 +129,7 @@ function decision_making(localization_state_channel,
 
         cur_road_segment_id = cur_map_segment_of_vehicle(position, map)
         @info "Current road segment: $cur_road_segment_id"
-        position_on_road = findSideOfRoad(position, cur_road_segment_id, map)
+        position_on_road = find_side_of_road(position, cur_road_segment_id, map)
         route = shortest_path(cur_road_segment_id, target_road_segment_id, map)
 
         @info "Route from $cur_road_segment_id to $target_road_segment_id calculated."
@@ -151,7 +151,7 @@ function decision_making(localization_state_channel,
                 cur_road_segment_id = popfirst!(route)
             end
 
-            position_on_road = findSideOfRoad(position, cur_road_segment_id, map)
+            position_on_road = find_side_of_road(position, cur_road_segment_id, map)
 
             if (position_on_road == "right")
                 steering_angle -= pi / 10
@@ -164,7 +164,11 @@ function decision_making(localization_state_channel,
             cmd = [steering_angle, target_velocity, true]
             serialize(socket, cmd)
         end
-        @info "Reached target: $target_road_segment_id."
+        if (cur_road_segment_id == target_road_segment_id)
+            @info "Reached target: $target_road_segment_id."
+        else
+            @info "Target not reached!"
+        end
     end
     @info "Terminated decision making task."
 end

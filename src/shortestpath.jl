@@ -8,7 +8,14 @@ function makeHeap(map, heap_handles, road_min_heap, dist_vals)
     end
 end
 
-function findShortestPath(map, start_road_ID, end_road_ID)
+"""
+Finds the shortest route of road segments from the
+current road segment to the target road segment
+    start_road_ID (int): road ID of the current road segment
+    end_road_ID (int): road ID of the target road segment
+    map: map of the environment
+"""
+function shortest_path(start_road_ID, end_road_ID, map)
     found_shortest_path = false
     heap_handles = Dict{Int, Int}() # key: road ID, value: handle
     dist_vals = Dict{Int, Any}() #key: road ID, value: current distance from start road
@@ -27,7 +34,7 @@ function findShortestPath(map, start_road_ID, end_road_ID)
         lane_boundaries = map[src_road].lane_boundaries
 
         if lane_boundaries[1].curvature != 0 # road length for 90 degree curved road. Road length is calculated using average radius
-            road_length = (abs(1 / lane_boundaries[1].curvature) + abs(1 / lane_boundaries[length(lane_boundaries)].curvature)) / 2 * pi / 2
+            road_length = (abs(1 / lane_boundaries[1].curvature - 1 / lane_boundaries[length(lane_boundaries)].curvature) / 2 + min(1 / lane_boundaries[1].curvature, 1 / lane_boundaries[length(lane_boundaries)].curvature)) * pi / 2
         else
             road_length = norm(lane_boundaries[1].pt_a - lane_boundaries[1].pt_b) # road length for straight road
         end
@@ -58,7 +65,14 @@ function findShortestPath(map, start_road_ID, end_road_ID)
     return route
 end
 
-function findCurrentRoad(latest_localization_state, map)
+"""
+Finds the map segment id the vehicle is estimated to be in
+    positon: [p1, p2] vector of any vehicle's position
+    map: map of the environment
+"""
+function cur_map_segment_of_vehicle(position, map)
+    p1, p2 = position
+
     polygon_edges = [1 2; 2 4; 4 3; 3 1]
     for road in map
         polygon_vertices = Array{Float64}(undef, 0, 2)
@@ -71,8 +85,8 @@ function findCurrentRoad(latest_localization_state, map)
                 polygon_vertices = vcat(polygon_vertices, boundary.pt_b')
             end
         end
-        if road_boundaries[1].curvature == 0 && 
-            inpoly2(latest_localization_state[1:2], polygon_vertices, polygon_edges)[1] == 1 # for straight roads
+        if road_boundaries[1].curvature == 0 &&
+            inpoly2(position, polygon_vertices, polygon_edges)[1] == 1 # for straight roads
             return road_id
         elseif road_boundaries[1].curvature != 0 # for curved roads
             pt_a1 = Point{2}(polygon_vertices[1,:])
@@ -97,18 +111,18 @@ function findCurrentRoad(latest_localization_state, map)
             max_y = maximum([pt_a1[2], pt_a2[2], pt_b1[2], pt_b2[2]])
             max_radius = 0
             min_radius = 1e7
-            dist_from_center = norm(latest_localization_state[1:2] - center_point)
+            dist_from_center = norm(position - center_point)
 
             for boundary in road_boundaries
                 max_radius = maximum([max_radius, abs(1 / boundary.curvature)])
                 min_radius = minimum([min_radius, abs(1 / boundary.curvature)])
             end
-            
-            if (latest_localization_state[1] < max_x) && 
-                (latest_localization_state[1] > min_x) && 
-                (latest_localization_state[2] < max_y) && 
-                (latest_localization_state[2] > min_y) && 
-                (dist_from_center > min_radius) && 
+
+            if (p1 < max_x) &&
+                (p1 > min_x) &&
+                (p2 < max_y) &&
+                (p2 > min_y) &&
+                (dist_from_center > min_radius) &&
                 (dist_from_center < max_radius)
                 return road_id
             end
@@ -117,7 +131,8 @@ function findCurrentRoad(latest_localization_state, map)
     return 0
 end
 
-function findSideOfRoad(latest_localization_state, current_road_id, map)
+
+function find_side_of_road(latest_localization_state, current_road_id, map)
     current_road_segment = map[current_road_id]
     road_boundaries = current_road_segment.lane_boundaries
 
