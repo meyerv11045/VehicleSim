@@ -112,25 +112,42 @@ end
 
 function decision_making(localization_state_channel,
         perception_state_channel,
+        target_road_segment_channel,
         shutdown_channel,
         map,
-        target_road_segment_id,
         socket)
     @info "Starting decision making task..."
-
-    # do some setup
     while true
         sleep(0.001) # prevent thread from hogging resources & freezing other threads
         isready(shutdown_channel) && break
 
-        latest_localization_state = fetch(localization_state_channel)
-        latest_perception_state = fetch(perception_state_channel)
+        target_road_segment_id = take!(target_road_segment_channel)
 
-        # figure out what to do ... setup motion planning problem etc
-        steering_angle = 0.0
-        target_vel = 0.0
-        cmd = VehicleCommand(steering_angle, target_vel, true)
-        serialize(socket, cmd)
+        localization_state = fetch(localization_state_channel)
+        position = localization_state.position[1:2] # ground truth for testing
+        # position = localization_state.x.position[1:2] # localization estimate
+
+        cur_road_segment_id = cur_map_segment_of_vehicle(position, map)
+        @info "Current road segment: $cur_road_segment_id"
+        route = shortest_path(cur_road_segment_id, target_road_segment_id, map)
+
+        @info "Route from $cur_road_segment_id to $target_road_segment_id calculated."
+        @info "Following the calculated route $route"
+
+        while cur_road_segment_id != target_road_segment_id
+            # slower checking since we aren't changing road segments that often
+            sleep(0.1) # prevent thread from hogging resources & freezing other threads
+
+            localization_state = fetch(localization_state_channel)
+            position = localization_state.position[1:2] # ground truth for testing
+            # position = localization_state.x.position[1:2] # localization estimate
+            cur_road_segment_id = cur_map_segment_of_vehicle(position, map)
+
+            # TODO: motion planning to follow the route
+            # cmd = follow_route(route, cur_road_segment_id, map)
+            # serialize(socket, cmd)
+        end
+        @info "Reached target: $target_road_segment_id."
     end
     @info "Terminated decision making task."
 end
@@ -157,7 +174,7 @@ function test_algorithms(gt_channel,
         while isready(gt_channel)
             meas = take!(gt_channel)
             id = meas.vehicle_id
-            @info meas
+
             if !haskey(gt_vehicle_states, id) || meas.time > gt_vehicle_states[id].time
                 gt_vehicle_states[id] = meas
             end
@@ -215,12 +232,15 @@ function test_algorithms(gt_channel,
     @info "Terminated testing task."
 end
 
-function publish_socket_data_to_channels(socket, gps_channel, imu_channel, cam_channel, gt_channel, shutdown_channel)
+function publish_socket_data_to_channels(socket, gps_channel, imu_channel, cam_channel, gt_channel, target_road_segment_channel, shutdown_channel)
     @info "Starting socket data publishing task..."
 
     while true
         sleep(0.001) # prevent thread from hogging resources & freezing other threads
         isready(shutdown_channel) && break
+
+        # stand in until the server publishes target road segments
+        !isfull(target_road_segment_channel) && put!(target_road_segment_channel, 55)
 
         # read to end of the socket stream to ensure you
         # are looking at the latest messages
@@ -260,13 +280,14 @@ function test_client(host::IPAddr=IPv4(0), port=4444; v_step = 1.0, s_step = π/
     msg = deserialize(socket) # Visualization info
     @info msg
 
+    map_segments = training_map()
     ego_vehicle_id = 1
-    target_road_segment_id = 32
 
     gps_channel = Channel{GPSMeasurement}(32)
     imu_channel = Channel{IMUMeasurement}(32)
     cam_channel = Channel{CameraMeasurement}(32)
     gt_channel = Channel{GroundTruthMeasurement}(32)
+    target_road_segment_channel = Channel{Int}(1)
     shutdown_channel = Channel{Bool}(1)
 
     localization_state_channel = Channel{LocalizationEstimate}(1)
@@ -275,10 +296,10 @@ function test_client(host::IPAddr=IPv4(0), port=4444; v_step = 1.0, s_step = π/
     # wrap worker threads in error monitor to print any errors
     # does not raise an error though
     # so we have to press q to quit and code below will handle killing worker threads
-    errormonitor(@async publish_socket_data_to_channels(socket, gps_channel, imu_channel, cam_channel, gt_channel, shutdown_channel))
+    errormonitor(@async publish_socket_data_to_channels(socket, gps_channel, imu_channel, cam_channel, gt_channel, target_road_segment_channel, shutdown_channel))
     # errormonitor(@async localize(gps_channel, imu_channel, localization_state_channel, shutdown_channel))
     # errormonitor(@asyc perception(cam_channel, localization_state_channel, perception_state_channel, shutdown_channel))
-    # errormonitor(@async decision_making(localization_state_channel, perception_state_channel, shutdown_channel, map, target_road_segment_id, socket))
+    errormonitor(@async decision_making(gt_channel, perception_state_channel, target_road_segment_channel, shutdown_channel, map_segments, socket))
     errormonitor(@async test_algorithms(gt_channel, localization_state_channel, perception_state_channel, shutdown_channel, ego_vehicle_id))
 
     target_velocity = 0.0
