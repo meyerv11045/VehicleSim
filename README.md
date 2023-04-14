@@ -44,6 +44,7 @@ julia> keyboard_client(ip"1.2.3.4") # ip address specified by @info statement wh
 julia> shutdown!(s)
 ```
 
-# Writing an autonomous vehicle client
-
-The file example_project.jl outlines a recommended architecture for ingesting sensor messages and creating vehicle commands.
+# Development workflow
+- Pre-compiling everything takes a while so we want to minimize time spent here
+  - Use Revise to let you make code changes without having to reload in the pkg: `using Revise, VehicleSim`
+  - the project code is setup with a shutdown_channel that worker threads use to kill themselves when you press `q`. this lets us use Revise since the threads don't keep running making us terminate the entire julia instance and restart it and the precompilation again
