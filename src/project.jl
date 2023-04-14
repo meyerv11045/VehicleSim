@@ -29,15 +29,13 @@ end
 function localize(gps_channel, imu_channel, localization_state_channel, shutdown_channel)
     @info "Starting localization task..."
     # Define the initial state and covariance p(x₀) ~ N(x₀, P₀)
-    x₀ = FullVehicleState(
-        [0.0, 0.0, 1],
-        [1.0, 0.0, 0.0, 0.0],
-        zeros(3),
-        zeros(3))
-    P₀ = Diagonal(ones(12))  # Initial covariance (uncertainty)
+    x₀ = zeros(13)
+    x₀[3] = 1 # body off ground
+    x₀[7] = 1
+    P₀ = Diagonal(ones(13))  # Initial covariance (uncertainty)
 
     # Process noise covariance
-    Q = Diagonal(0.01*ones(12))
+    Q = Diagonal(0.01*ones(13))
 
     # Measurement noise covariance (taken from the generator functions)
     imu_variance = Diagonal([0.01, 0.01, 0.01, 0.01, 0.01, 0.01].^2)
@@ -47,6 +45,9 @@ function localize(gps_channel, imu_channel, localization_state_channel, shutdown
     x̂ = x₀
     P̂ = P₀
 
+    @info all(isfinite, x̂)
+    @info all(isfinite, P̂)
+    @info "looping now"
     while true
         sleep(0.001) # prevent thread from hogging resources & freezing other threads
         isready(shutdown_channel) && break
@@ -63,17 +64,20 @@ function localize(gps_channel, imu_channel, localization_state_channel, shutdown
         end
 
         while length(fresh_gps_meas) > 0 || length(fresh_imu_meas) > 0
-            if length(fresh_gps_meas) == length(fresh_imu_meas)
-                z = popfirst!(fresh_gps_meas)
-            elseif length(fresh_gps_meas) > length(fresh_imu_meas)
-                z = popfirst!(fresh_gps_meas)
+            if length(fresh_gps_meas) ≥ length(fresh_imu_meas)
+                meas = popfirst!(fresh_gps_meas)
+                z = [meas.lat; meas.long]
+                R = gps_variance
             else
-                z = popfirst!(fresh_imu_meas)
+                meas = popfirst!(fresh_imu_meas)
+                z = [meas.linear_vel ; meas.angular_vel]
+                R = imu_variance
             end
 
-            x̂, P̂ = ekf_step(z, x̂, P̂, Q, imu_variance, gps_variance)
+            x̂, P̂ = ekf_step(z, x̂, P̂, Q, R)
 
-            localization_state = LocalizationEstimate(time(), FullVehicleState(x̂...))
+            state = FullVehicleState(x̂[1:3], x̂[4:7], x̂[8:10], x̂[11:13])
+            localization_state = LocalizationEstimate(time(), state)
             @info "Localization state: $localization_state"
             if isready(localization_state_channel)
                 take!(localization_state_channel)
@@ -81,7 +85,7 @@ function localize(gps_channel, imu_channel, localization_state_channel, shutdown
             put!(localization_state_channel, localization_state)
         end
     end
-    @info "Finished localization task."
+    @info "Terminated localization task."
 end
 
 function perception(cam_meas_channel, localization_state_channel, perception_state_channel, shutdown_channel)
@@ -179,6 +183,7 @@ function test_algorithms(gt_channel,
                 gt_vehicle_states[id] = meas
             end
         end
+
 
         # latest_estimated_ego_state = fetch(localization_state_channel)
         # latest_true_ego_state = gt_vehicle_states[ego_vehicle_id]
@@ -297,9 +302,9 @@ function test_client(host::IPAddr=IPv4(0), port=4444; v_step = 1.0, s_step = π/
     # does not raise an error though
     # so we have to press q to quit and code below will handle killing worker threads
     errormonitor(@async publish_socket_data_to_channels(socket, gps_channel, imu_channel, cam_channel, gt_channel, target_road_segment_channel, shutdown_channel))
-    # errormonitor(@async localize(gps_channel, imu_channel, localization_state_channel, shutdown_channel))
+    errormonitor(@async localize(gps_channel, imu_channel, localization_state_channel, shutdown_channel))
     # errormonitor(@asyc perception(cam_channel, localization_state_channel, perception_state_channel, shutdown_channel))
-    errormonitor(@async decision_making(gt_channel, perception_state_channel, target_road_segment_channel, shutdown_channel, map_segments, socket))
+    # errormonitor(@async decision_making(gt_channel, perception_state_channel, target_road_segment_channel, shutdown_channel, map_segments, socket))
     errormonitor(@async test_algorithms(gt_channel, localization_state_channel, perception_state_channel, shutdown_channel, ego_vehicle_id))
 
     target_velocity = 0.0

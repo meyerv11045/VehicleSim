@@ -1,11 +1,42 @@
 """ Process Model: p(xₖ | xₖ₋₁)
-    Given the current state, returns the mean next state """
-function f(x, Δ)
-    rigid_body_dynamics(x.position, x.quaternion, x.linear_vel, x.angular_vel, Δ)
+    Given the current state, returns the mean next state
+"""
+function f(x, Δt)
+    position = x[1:3]
+    quaternion = x[4:7]
+    velocity = x[8:10]
+    angular_vel = x[11:13]
+
+    # quaternion update
+    r = angular_vel
+    mag = norm(r)
+
+    sᵣ = cos(mag*Δt / 2.0)
+    vᵣ = sin(mag*Δt / 2.0) * r/mag
+
+    sₙ = quaternion[1]
+    vₙ = quaternion[2:4]
+
+    s = sₙ*sᵣ - vₙ'*vᵣ
+    v = sₙ*vᵣ+sᵣ*vₙ+vₙ×vᵣ
+
+    new_position = position + Δt * velocity
+    new_quaternion = [s; v]
+    return [new_position; new_quaternion; velocity; angular_vel]
 end
 
 function jac_fx(x, Δ)
-    gradient(state -> f(state, Δ), x)[1]
+    jacobian(state -> f(state, Δ), x)[1]
+end
+
+function get_differentiable_imu_transform()
+    # replace RotY(0.02) with its values since we can't take derivative through RotY(θ)
+    R_imu_in_body = [0.9998 0.0 0.0199987;
+                     0.0    1.0      0.0;
+                     -0.0199987 0.0 0.9998]
+    t_imu_in_body = [0, 0, 0.7]
+
+    T = [R_imu_in_body t_imu_in_body]
 end
 
 """ Measurement Model: p(zₖ | xₖ)
@@ -17,20 +48,20 @@ function h(x, output_gps_measurement=true)
         T_body_to_gps = get_gps_transform()
         gps_loc_body = T_body_to_gps*[zeros(3); 1.0]
 
-        xyz_body = x.position
-        q_body = x.quaternion
+        xyz_body = x[1:3]
+        q_body = x[4:7]
         Tbody = get_body_transform(q_body, xyz_body)
         xyz_gps = Tbody * [gps_loc_body; 1]
         return xyz_gps[1:2]
     else
         # output in IMU frame
-        T_body_imu = get_imu_transform()
+        T_body_imu = get_differentiable_imu_transform()
         T_imu_body = invert_transform(T_body_imu)
         R = T_imu_body[1:3,1:3]
         p = T_imu_body[1:3,end]
 
-        v_body = x.linear_vel
-        ω_body = x.angular_vel
+        v_body = x[8:10]
+        ω_body = x[11:13]
 
         ω_imu = R * ω_body
         v_imu = R * v_body + p × ω_imu
@@ -40,29 +71,35 @@ function h(x, output_gps_measurement=true)
 end
 
 function jac_hx(x, output_gps_measurement)
-    gradient(state -> h(state, output_gps_measurement), x)[1]
+    jacobian(state -> h(state, output_gps_measurement), x)[1]
 end
 
-function ekf_step(z, x̂, P̂, Q, R_imu, R_gps, Δ=0.01)
-    is_gps_measurement = isa(z, GPSMeasurement)
-    if is_gps_measurement
-        R = R_gps
-    else
-        R = R_imu
-    end
+function ekf_step(z, x̂, P̂, Q, R, Δ=0.01)
+    @info "taking ekf step"
+    is_gps_measurement = length(z) == 2
+    # @info "is_gps_measurement: $is_gps_measurement"
 
     # Prediction step
     x̂ = f(x̂, Δ)
+    @info all(isfinite, x̂)
     F = jac_fx(x̂, Δ)
+    @info all(isfinite, F)
+    # @info size(F), size(P̂), size(F'), size(Q)
     P̂ = F*P̂*F' + Q
 
     # Update step
     ẑ = h(x̂, is_gps_measurement)
+    @info all(isfinite, ẑ)
     H = jac_hx(x̂, is_gps_measurement)
+    @info all(isfinite, H)
+    # @info size(H), size(P̂), size(H'), size(R)
     S = H*P̂*H' + R
 
-    K = P̂*H'*inv(S) # Kalman gain
+    inv_s = inv(S)
+    # @info size(P̂), size(H'), size(inv_s)
+    K = P̂*H'* inv_s # Kalman gain
 
+    # @info size(x̂), size(K), size(z), size(ẑ)
     # Update mean and covariance estimate of for xₖ
     x̂ = x̂ + K*(z - ẑ)
     P̂ = (I - K*H)*P̂
