@@ -120,7 +120,7 @@ function decision_making(localization_state_channel,
     @info "Starting decision making task..."
 
     steering_angle = 0.0
-    target_velocity = 2.0
+    target_velocity = 1.0
 
     while true
         sleep(0.001) # prevent thread from hogging resources & freezing other threads
@@ -129,8 +129,7 @@ function decision_making(localization_state_channel,
         target_road_segment_id = take!(target_road_segment_channel)
 
         localization_state = fetch(localization_state_channel)
-        position = localization_state.position[1:2] # ground truth for testing
-        # position = localization_state.x.position[1:2] # localization estimate
+        position = localization_state.position[1:2]
 
         cur_road_segment_id = cur_map_segment_of_vehicle(position, map)
 
@@ -139,21 +138,19 @@ function decision_making(localization_state_channel,
         @info "Following the calculated route $route"
 
         while !isnothing(cur_road_segment_id) && cur_road_segment_id != target_road_segment_id
-            # slower checking since we aren't changing road segments that often
+            # output vehicle cmds at 10 Hz (maybe increase or decrease for better performance)
             sleep(0.1)
 
             localization_state = fetch(localization_state_channel)
-            position = localization_state.position[1:2] # ground truth for testing
-            # position = localization_state.x.position[1:2] # localization estimate
+            position = localization_state.position[1:2]
             cur_road_segment_id = cur_map_segment_of_vehicle(position, map)
 
             position_on_road = find_side_of_road(position, cur_road_segment_id, map)
 
-            # TODO: add in logic that changes the steering to follow the route
             if position_on_road == "right"
-                steering_angle -= π/10
+                steering_angle -= π/20
             elseif position_on_road == "left"
-                steering_angle += π/10
+                steering_angle += π/20
             else # error
                 cur_road_segment_id = popfirst!(route)
             end
@@ -328,6 +325,7 @@ function test_client(host::IPAddr=IPv4(0), port=4444; v_step = 1.0, s_step = π/
     errormonitor(@async localize(gps_channel, imu_channel, localization_state_channel, shutdown_channel))
     # errormonitor(@asyc perception(cam_channel, localization_state_channel, perception_state_channel, shutdown_channel))
     if !use_keyboard
+        # use gt channel instead of localization channel for testing purposes
         errormonitor(@async decision_making(gt_channel, perception_state_channel, target_road_segment_channel, shutdown_channel, map_segments, socket))
     end
     errormonitor(@async test_algorithms(gt_channel, localization_state_channel, perception_state_channel, shutdown_channel, ego_vehicle_id))
