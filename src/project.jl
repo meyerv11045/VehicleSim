@@ -9,16 +9,12 @@ struct SimpleVehicleState
 end
 
 # for use with the ego vehicles
-struct FullVehicleState
+struct LocalizationEstimate
+    time::Float64
     position::SVector{3, Float64}
     quaternion::SVector{4, Float64}
     linear_vel::SVector{3, Float64}
     angular_vel::SVector{3, Float64}
-end
-
-struct LocalizationEstimate
-    last_update::Float64
-    x::FullVehicleState
 end
 
 struct Percept
@@ -28,10 +24,16 @@ end
 
 function localize(gps_channel, imu_channel, localization_state_channel, shutdown_channel)
     @info "Starting localization task..."
-    # Define the initial state and covariance p(x₀) ~ N(x₀, P₀)
+
+    # TODO: Tune values to improve performance
+    # especially the velocity and angular velocity in the process covariance
+    # since our dynamics model does not take into account controls
+
+    # Initial state and covariance p(x₀) ~ N(x₀, P₀)
     x₀ = zeros(13)
-    x₀[3] = 1 # body off ground
-    x₀[7] = 1
+    x₀[1:3] = [-91, -6, 2.6]
+    x₀[7] = 1 # quaternion corresponding to no rotation
+
     P₀ = Diagonal(ones(13))  # Initial covariance (uncertainty)
 
     # Process noise covariance
@@ -45,9 +47,6 @@ function localize(gps_channel, imu_channel, localization_state_channel, shutdown
     x̂ = x₀
     P̂ = P₀
 
-    @info all(isfinite, x̂)
-    @info all(isfinite, P̂)
-    @info "looping now"
     while true
         sleep(0.001) # prevent thread from hogging resources & freezing other threads
         isready(shutdown_channel) && break
@@ -76,9 +75,7 @@ function localize(gps_channel, imu_channel, localization_state_channel, shutdown
 
             x̂, P̂ = ekf_step(z, x̂, P̂, Q, R)
 
-            state = FullVehicleState(x̂[1:3], x̂[4:7], x̂[8:10], x̂[11:13])
-            localization_state = LocalizationEstimate(time(), state)
-            @info "Localization state: $localization_state"
+            localization_state = LocalizationEstimate(time(), x̂[1:3], x̂[4:7], x̂[8:10], x̂[11:13])
             if isready(localization_state_channel)
                 take!(localization_state_channel)
             end
@@ -167,8 +164,11 @@ function test_algorithms(gt_channel,
     ego_vehicle_id)
     @info "Starting testing task..."
 
-    estimated_vehicle_states = Dict{Int, Tuple{Float64, Union{SimpleVehicleState, FullVehicleState}}}()
+    # estimated_vehicle_states = Dict{Int, Tuple{Float64, Union{SimpleVehicleState, LocalizationEstimate}}}()
     gt_vehicle_states = Dict{Int, GroundTruthMeasurement}()
+
+    # only start testing after we have received the first ground truth measurement
+    wait(gt_channel)
 
     t = time()
     while true
@@ -179,26 +179,28 @@ function test_algorithms(gt_channel,
             meas = take!(gt_channel)
             id = meas.vehicle_id
 
+            # add measurement to gt state dictionary if vehicle id doesn't
+            # exist or measurement is more recent than existing measurement
             if !haskey(gt_vehicle_states, id) || meas.time > gt_vehicle_states[id].time
                 gt_vehicle_states[id] = meas
             end
         end
 
-
-        # latest_estimated_ego_state = fetch(localization_state_channel)
-        # latest_true_ego_state = gt_vehicle_states[ego_vehicle_id]
-        # if latest_estimated_ego_state.last_update < latest_true_ego_state.time - 0.5
-        #     @warn "Localization algorithm stale."
-        # else
-        #     estimated_xyz = latest_estimated_ego_state.position
-        #     true_xyz = latest_true_ego_state.position
-        #     position_error = norm(estimated_xyz - true_xyz)
-        #     t2 = time()
-        #     if t2 - t > 5.0
-        #         @info "Localization position error: $position_error"
-        #         t = t2
-        #     end
-        # end
+        latest_est_ego_state = fetch(localization_state_channel)
+        latest_gt_ego_state = gt_vehicle_states[ego_vehicle_id]
+        if latest_est_ego_state.time < latest_gt_ego_state.time - 0.5
+            @warn "Localization algorithm stale."
+        else
+            estimated_xyz = latest_est_ego_state.position
+            true_xyz = latest_gt_ego_state.position
+            position_error = norm(estimated_xyz - true_xyz)
+            t2 = time()
+            if t2 - t > 5.0
+                @info "Localization position error: $position_error"
+                @info "estimated: $estimated_xyz | true: $true_xyz"
+                t = t2
+            end
+        end
 
         # latest_perception_state = fetch(perception_state_channel)
         # last_perception_update = latest_perception_state.last_update

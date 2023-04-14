@@ -11,8 +11,14 @@ function f(x, Δt)
     r = angular_vel
     mag = norm(r)
 
-    sᵣ = cos(mag*Δt / 2.0)
-    vᵣ = sin(mag*Δt / 2.0) * r/mag
+    if mag < 1e-5
+        # prevent divide by zero -> NaNs
+        sᵣ = 1.0
+        vᵣ = zeros(3)
+    else
+        sᵣ = cos(mag*Δt / 2.0)
+        vᵣ = sin(mag*Δt / 2.0) * r/mag
+    end
 
     sₙ = quaternion[1]
     vₙ = quaternion[2:4]
@@ -75,31 +81,21 @@ function jac_hx(x, output_gps_measurement)
 end
 
 function ekf_step(z, x̂, P̂, Q, R, Δ=0.01)
-    @info "taking ekf step"
     is_gps_measurement = length(z) == 2
-    # @info "is_gps_measurement: $is_gps_measurement"
 
     # Prediction step
     x̂ = f(x̂, Δ)
-    @info all(isfinite, x̂)
     F = jac_fx(x̂, Δ)
-    @info all(isfinite, F)
-    # @info size(F), size(P̂), size(F'), size(Q)
     P̂ = F*P̂*F' + Q
 
     # Update step
     ẑ = h(x̂, is_gps_measurement)
-    @info all(isfinite, ẑ)
     H = jac_hx(x̂, is_gps_measurement)
-    @info all(isfinite, H)
-    # @info size(H), size(P̂), size(H'), size(R)
     S = H*P̂*H' + R
 
     inv_s = inv(S)
-    # @info size(P̂), size(H'), size(inv_s)
     K = P̂*H'* inv_s # Kalman gain
 
-    # @info size(x̂), size(K), size(z), size(ẑ)
     # Update mean and covariance estimate of for xₖ
     x̂ = x̂ + K*(z - ẑ)
     P̂ = (I - K*H)*P̂
