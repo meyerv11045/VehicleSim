@@ -118,6 +118,10 @@ function decision_making(localization_state_channel,
         map,
         socket)
     @info "Starting decision making task..."
+
+    steering_angle = 0.0
+    target_velocity = 1.0
+
     while true
         sleep(0.001) # prevent thread from hogging resources & freezing other threads
         isready(shutdown_channel) && break
@@ -125,30 +129,44 @@ function decision_making(localization_state_channel,
         target_road_segment_id = take!(target_road_segment_channel)
 
         localization_state = fetch(localization_state_channel)
-        position = localization_state.position[1:2] # ground truth for testing
-        # position = localization_state.x.position[1:2] # localization estimate
+        position = localization_state.position[1:2]
 
         cur_road_segment_id = cur_map_segment_of_vehicle(position, map)
-        @info "Current road segment: $cur_road_segment_id"
-        route = shortest_path(cur_road_segment_id, target_road_segment_id, map)
 
+        route = shortest_path(cur_road_segment_id, target_road_segment_id, map)
         @info "Route from $cur_road_segment_id to $target_road_segment_id calculated."
         @info "Following the calculated route $route"
 
-        while cur_road_segment_id != target_road_segment_id
-            # slower checking since we aren't changing road segments that often
-            sleep(0.1) # prevent thread from hogging resources & freezing other threads
+        while !isnothing(cur_road_segment_id) && cur_road_segment_id != target_road_segment_id
+            # output vehicle cmds at 10 Hz (maybe increase or decrease for better performance)
+            sleep(0.1)
 
             localization_state = fetch(localization_state_channel)
-            position = localization_state.position[1:2] # ground truth for testing
-            # position = localization_state.x.position[1:2] # localization estimate
+            position = localization_state.position[1:2]
             cur_road_segment_id = cur_map_segment_of_vehicle(position, map)
 
-            # TODO: motion planning to follow the route
-            # cmd = follow_route(route, cur_road_segment_id, map)
-            # serialize(socket, cmd)
+            position_on_road = find_side_of_road(position, cur_road_segment_id, map)
+
+            if position_on_road == "right"
+                steering_angle -= π/20
+            elseif position_on_road == "left"
+                steering_angle += π/20
+            else # error
+                cur_road_segment_id = popfirst!(route)
+            end
+
+            # TODO: add in perception to stop vehicle if car in front on same segment
+
+            cmd = VehicleCommand(steering_angle, target_velocity, true)
+            serialize(socket, cmd)
         end
-        @info "Reached target: $target_road_segment_id."
+        if cur_road_segment_id == target_road_segment_id
+            @info "Reached target: $target_road_segment_id."
+        elseif isnothing(cur_road_segment_id)
+            @warn "Vehicle is not on any road segment!"
+        else
+            @info "Target not reached!"
+        end
     end
     @info "Terminated decision making task."
 end
@@ -281,7 +299,7 @@ function publish_socket_data_to_channels(socket, gps_channel, imu_channel, cam_c
     @info "Terminated socket data publishing task."
 end
 
-function test_client(host::IPAddr=IPv4(0), port=4444; v_step = 1.0, s_step = π/10)
+function test_client(host::IPAddr=IPv4(0), port=4444; v_step = 1.0, s_step = π/10, use_keyboard=true)
     socket = Sockets.connect(host, port)
     (peer_host, peer_port) = getpeername(socket)
     msg = deserialize(socket) # Visualization info
@@ -306,7 +324,10 @@ function test_client(host::IPAddr=IPv4(0), port=4444; v_step = 1.0, s_step = π/
     errormonitor(@async publish_socket_data_to_channels(socket, gps_channel, imu_channel, cam_channel, gt_channel, target_road_segment_channel, shutdown_channel))
     errormonitor(@async localize(gps_channel, imu_channel, localization_state_channel, shutdown_channel))
     # errormonitor(@asyc perception(cam_channel, localization_state_channel, perception_state_channel, shutdown_channel))
-    # errormonitor(@async decision_making(gt_channel, perception_state_channel, target_road_segment_channel, shutdown_channel, map_segments, socket))
+    if !use_keyboard
+        # use gt channel instead of localization channel for testing purposes
+        errormonitor(@async decision_making(gt_channel, perception_state_channel, target_road_segment_channel, shutdown_channel, map_segments, socket))
+    end
     errormonitor(@async test_algorithms(gt_channel, localization_state_channel, perception_state_channel, shutdown_channel, ego_vehicle_id))
 
     target_velocity = 0.0
@@ -341,7 +362,9 @@ function test_client(host::IPAddr=IPv4(0), port=4444; v_step = 1.0, s_step = π/
             steering_angle -= s_step
             @info "Target steering angle: $steering_angle"
         end
-        cmd = VehicleCommand(steering_angle, target_velocity, controlled)
-        serialize(socket, cmd)
+        if use_keyboard
+            cmd = VehicleCommand(steering_angle, target_velocity, controlled)
+            serialize(socket, cmd)
+        end
     end
 end

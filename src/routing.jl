@@ -1,4 +1,4 @@
-function makeHeap(map, heap_handles, road_min_heap, dist_vals)
+function populate_heap!(map, heap_handles, road_min_heap, dist_vals)
     for road_segment in map # road_segment is a Pair: [road_id, RoadSegment]
         road_id = road_segment[1]
 
@@ -22,7 +22,7 @@ function shortest_path(start_road_ID, end_road_ID, map)
     road_min_heap = MutableBinaryMinHeap{Vector{Any}}() # each heap node is [distance value, road ID]
     parent_road = Dict{Int, Int}() # key: road ID, value: parent road
 
-    makeHeap(map, heap_handles, road_min_heap, dist_vals)
+    populate_heap!(map, heap_handles, road_min_heap, dist_vals)
     update!(road_min_heap, heap_handles[start_road_ID], [0, start_road_ID])
     dist_vals[start_road_ID] = 0
 
@@ -128,10 +128,11 @@ function cur_map_segment_of_vehicle(position, map)
             end
         end
     end
-    return 0
+    @warn "vehicle at $position is not on the road"
+    return nothing # vehicle off the road
 end
 
-function findSideOfRoad(latest_localization_state, current_road_id, map)
+function find_side_of_road(position, current_road_id, map)
     current_road_segment = map[current_road_id]
     road_boundaries = current_road_segment.lane_boundaries
 
@@ -142,13 +143,13 @@ function findSideOfRoad(latest_localization_state, current_road_id, map)
 
     for boundary in road_boundaries[1:2]
         whole_road_vertices = vcat(whole_road_vertices, boundary.pt_a')
-        whole_road_vertices = vcat(polygon_vertices, boundary.pt_b')
+        whole_road_vertices = vcat(whole_road_vertices, boundary.pt_b')
     end
 
-    pt_a1 = Point{2}(polygon_vertices[1,:])
-    pt_b1 = Point{2}(polygon_vertices[2,:])
-    pt_a2 = Point{2}(polygon_vertices[3,:])
-    pt_b2 = Point{2}(polygon_vertices[4,:])
+    pt_a1 = Point{2}(whole_road_vertices[1,:])
+    pt_b1 = Point{2}(whole_road_vertices[2,:])
+    pt_a2 = Point{2}(whole_road_vertices[3,:])
+    pt_b2 = Point{2}(whole_road_vertices[4,:])
 
     midpoint_a = (pt_a1 + pt_a2) / 2
     midpoint_b = (pt_b1 + pt_b2) / 2
@@ -158,19 +159,46 @@ function findSideOfRoad(latest_localization_state, current_road_id, map)
     left_road_vertices = vcat(left_road_vertices, midpoint_a')
     left_road_vertices = vcat(left_road_vertices, midpoint_b')
 
-    right_road_vertices = vcat(left_road_vertices, midpoint_a')
-    right_road_vertices = vcat(left_road_vertices, midpoint_b')
-    right_road_vertices = vcat(left_road_vertices, pt_a2')
-    right_road_vertices = vcat(left_road_vertices, pt_b2')
+    right_road_vertices = vcat(right_road_vertices, midpoint_a')
+    right_road_vertices = vcat(right_road_vertices, midpoint_b')
+    right_road_vertices = vcat(right_road_vertices, pt_a2')
+    right_road_vertices = vcat(right_road_vertices, pt_b2')
 
     if road_boundaries[1].curvature == 0 # for straight roads
-        if inpoly2(latest_localization_state[1:2], left_road_vertices, polygon_edges)[1] == 1
-            return left
-        elseif inpoly2(latest_localization_state[1:2], right_road_vertices, polygon_edges)[1] == 1
-            return right
+        if inpoly2(position, right_road_vertices, polygon_edges)[2] == 1 && inpoly2(position, left_road_vertices, polygon_edges)[2] == 1
+            return "middle"
+        elseif inpoly2(position, left_road_vertices, polygon_edges)[1] == 1
+            return "left"
+        elseif inpoly2(position, right_road_vertices, polygon_edges)[1] == 1
+            return "right"
+        else
+            return "error"
         end
-    else
+    else # for curved roads
+        min_radius = minimum([abs(1 / road_boundaries[1].curvature), abs(1 / road_boundaries[2].curvature)])
+        max_radius = maximum([abs(1 / road_boundaries[1].curvature), abs(1 / road_boundaries[2].curvature)])
+        mid_radius = (min_radius + max_radius) / 2
+        slope1 = (pt_a1[2] - pt_a2[2]) / (pt_a1[1] - pt_a2[1])
+        center_point = [0,0]
 
+        if isinf(slope1)
+            center_point = [pt_a1[1], pt_b1[2]]
+        else
+            center_point = [pt_b1[1], pt_a1[2]]
+        end
+
+        dist_from_center = norm(position - center_point)
+
+        if abs(dist_from_center - mid_radius) < 0.00001
+            return "middle"
+        elseif (dist_from_center > min_radius) && (dist_from_center < max_radius)
+            if ((dist_from_center > mid_radius) && (abs(1 / road_boundaries[1].curvature) > abs(1 / road_boundaries[2].curvature))) || (((dist_from_center < mid_radius) && (abs(1 / road_boundaries[1].curvature) < abs(1 / road_boundaries[2].curvature))))
+                return "left"
+            elseif ((dist_from_center > mid_radius) && (abs(1 / road_boundaries[1].curvature) < abs(1 / road_boundaries[2].curvature))) || (((dist_from_center < mid_radius) && (abs(1 / road_boundaries[1].curvature) > abs(1 / road_boundaries[2].curvature))))
+                return "right"
+            end
+        else
+            return "error"
+        end
     end
-
 end
