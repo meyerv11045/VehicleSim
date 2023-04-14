@@ -29,8 +29,11 @@ end
 function localize(gps_channel, imu_channel, localization_state_channel, shutdown_channel)
     @info "Starting localization task..."
     # Define the initial state and covariance p(x₀) ~ N(x₀, P₀)
-    x₀ = zeros(12)
-    x₀[3] = 1 # height of vehicle off the ground
+    x₀ = FullVehicleState(
+        [0.0, 0.0, 1],
+        [1.0, 0.0, 0.0, 0.0],
+        zeros(3),
+        zeros(3))
     P₀ = Diagonal(ones(12))  # Initial covariance (uncertainty)
 
     # Process noise covariance
@@ -44,12 +47,9 @@ function localize(gps_channel, imu_channel, localization_state_channel, shutdown
     x̂ = x₀
     P̂ = P₀
 
-    @info "time to loop"
     while true
         sleep(0.001) # prevent thread from hogging resources & freezing other threads
-        if isready(shutdown_channel)
-            fetch(shutdown_channel) && throw(error("Shutdown!"))
-        end
+        isready(shutdown_channel) && break
 
         fresh_gps_meas = []
         while isready(gps_channel)
@@ -62,10 +62,6 @@ function localize(gps_channel, imu_channel, localization_state_channel, shutdown
             push!(fresh_imu_meas, meas)
         end
 
-        l = length(fresh_gps_meas)
-        l0 = length(fresh_imu_meas)
-        # @info "Fresh GPS measurements: $l Fresh IMU Measurements: $l0"
-
         while length(fresh_gps_meas) > 0 || length(fresh_imu_meas) > 0
             if length(fresh_gps_meas) == length(fresh_imu_meas)
                 z = popfirst!(fresh_gps_meas)
@@ -75,7 +71,7 @@ function localize(gps_channel, imu_channel, localization_state_channel, shutdown
                 z = popfirst!(fresh_imu_meas)
             end
 
-            x̂, P̂ = ekf_step(z, x̂, P̂, imu_variance, gps_variance)
+            x̂, P̂ = ekf_step(z, x̂, P̂, Q, imu_variance, gps_variance)
 
             localization_state = LocalizationEstimate(time(), FullVehicleState(x̂...))
             @info "Localization state: $localization_state"
@@ -85,15 +81,15 @@ function localize(gps_channel, imu_channel, localization_state_channel, shutdown
             put!(localization_state_channel, localization_state)
         end
     end
+    @info "Finished localization task."
 end
 
 function perception(cam_meas_channel, localization_state_channel, perception_state_channel, shutdown_channel)
+    @info "Starting perception task..."
     # set up stuff
     while true
         sleep(0.001) # prevent thread from hogging resources & freezing other threads
-        if isready(shutdown_channel)
-            fetch(shutdown_channel) && throw(error("Shutdown!"))
-        end
+        isready(shutdown_channel) && break
 
         fresh_cam_meas = []
         while isready(cam_meas_channel)
@@ -111,6 +107,7 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
         end
         put!(perception_state_channel, perception_state)
     end
+    @info "Terminated perception task."
 end
 
 function decision_making(localization_state_channel,
@@ -119,12 +116,12 @@ function decision_making(localization_state_channel,
         map,
         target_road_segment_id,
         socket)
+    @info "Starting decision making task..."
+
     # do some setup
     while true
         sleep(0.001) # prevent thread from hogging resources & freezing other threads
-        if isready(shutdown_channel)
-            fetch(shutdown_channel) && throw(error("Shutdown!"))
-        end
+        isready(shutdown_channel) && break
 
         latest_localization_state = fetch(localization_state_channel)
         latest_perception_state = fetch(perception_state_channel)
@@ -135,6 +132,7 @@ function decision_making(localization_state_channel,
         cmd = VehicleCommand(steering_angle, target_vel, true)
         serialize(socket, cmd)
     end
+    @info "Terminated decision making task."
 end
 
 function isfull(ch::Channel)
@@ -146,42 +144,39 @@ function test_algorithms(gt_channel,
     perception_state_channel,
     shutdown_channel,
     ego_vehicle_id)
+    @info "Starting testing task..."
 
-    estimated_vehicle_states = Dict{Int, Tuple{Float64, Union{SimpleVehicleState, FullVehicleState}}}
-    gt_vehicle_states = Dict{Int, GroundTruthMeasurement}
+    estimated_vehicle_states = Dict{Int, Tuple{Float64, Union{SimpleVehicleState, FullVehicleState}}}()
+    gt_vehicle_states = Dict{Int, GroundTruthMeasurement}()
 
-    @info "in the testing algorithm"
     t = time()
     while true
         sleep(0.001) # prevent thread from hogging resources & freezing other threads
-        if isready(shutdown_channel)
-            fetch(shutdown_channel) && throw(error("Shutdown!"))
-        end
-        a = isready(gt_channel)
-        @info a
+        isready(shutdown_channel) && break
+
         while isready(gt_channel)
             meas = take!(gt_channel)
             id = meas.vehicle_id
-            @info "ground truth $meas"
-            if meas.time > gt_vehicle_states[id].time
+            @info meas
+            if !haskey(gt_vehicle_states, id) || meas.time > gt_vehicle_states[id].time
                 gt_vehicle_states[id] = meas
             end
         end
 
-        latest_estimated_ego_state = fetch(localization_state_channel)
-        latest_true_ego_state = gt_vehicle_states[ego_vehicle_id]
-        if latest_estimated_ego_state.last_update < latest_true_ego_state.time - 0.5
-            @warn "Localization algorithm stale."
-        else
-            estimated_xyz = latest_estimated_ego_state.position
-            true_xyz = latest_true_ego_state.position
-            position_error = norm(estimated_xyz - true_xyz)
-            t2 = time()
-            if t2 - t > 5.0
-                @info "Localization position error: $position_error"
-                t = t2
-            end
-        end
+        # latest_estimated_ego_state = fetch(localization_state_channel)
+        # latest_true_ego_state = gt_vehicle_states[ego_vehicle_id]
+        # if latest_estimated_ego_state.last_update < latest_true_ego_state.time - 0.5
+        #     @warn "Localization algorithm stale."
+        # else
+        #     estimated_xyz = latest_estimated_ego_state.position
+        #     true_xyz = latest_true_ego_state.position
+        #     position_error = norm(estimated_xyz - true_xyz)
+        #     t2 = time()
+        #     if t2 - t > 5.0
+        #         @info "Localization position error: $position_error"
+        #         t = t2
+        #     end
+        # end
 
         # latest_perception_state = fetch(perception_state_channel)
         # last_perception_update = latest_perception_state.last_update
@@ -217,32 +212,30 @@ function test_algorithms(gt_channel,
         #     end
         # end
     end
+    @info "Terminated testing task."
 end
 
 function publish_socket_data_to_channels(socket, gps_channel, imu_channel, cam_channel, gt_channel, shutdown_channel)
+    @info "Starting socket data publishing task..."
+
     while true
         sleep(0.001) # prevent thread from hogging resources & freezing other threads
-        if isready(shutdown_channel)
-            fetch(shutdown_channel) && throw(error("Shutdown!"))
-        end
+        isready(shutdown_channel) && break
 
         # read to end of the socket stream to ensure you
         # are looking at the latest messages
-        measurement_msg = nothing
+        local measurement_msg
+        received = false
         while true
             @async eof(socket)
             if bytesavailable(socket) > 0
                 measurement_msg = deserialize(socket)
+                received = true
             else
                 break
             end
         end
-        if isnothing(measurement_msg)
-            continue
-        end
-
-        target_map_segment = measurement_msg.target_segment
-        ego_vehicle_id = measurement_msg.vehicle_id
+        !received && continue
 
         # publish measurements from socket to measurement channels
         # so they can be used in the worker threads
@@ -254,12 +247,11 @@ function publish_socket_data_to_channels(socket, gps_channel, imu_channel, cam_c
             elseif meas isa CameraMeasurement
                 !isfull(cam_channel) && put!(cam_channel, meas)
             elseif meas isa GroundTruthMeasurement
-                @info fetch(gt_channel)
                 !isfull(gt_channel) && put!(gt_channel, meas)
-                @info fetch(gt_channel)
             end
         end
     end
+    @info "Terminated socket data publishing task."
 end
 
 function test_client(host::IPAddr=IPv4(0), port=4444; v_step = 1.0, s_step = π/10)
@@ -269,6 +261,7 @@ function test_client(host::IPAddr=IPv4(0), port=4444; v_step = 1.0, s_step = π/
     @info msg
 
     ego_vehicle_id = 1
+    target_road_segment_id = 32
 
     gps_channel = Channel{GPSMeasurement}(32)
     imu_channel = Channel{IMUMeasurement}(32)
@@ -283,7 +276,9 @@ function test_client(host::IPAddr=IPv4(0), port=4444; v_step = 1.0, s_step = π/
     # does not raise an error though
     # so we have to press q to quit and code below will handle killing worker threads
     errormonitor(@async publish_socket_data_to_channels(socket, gps_channel, imu_channel, cam_channel, gt_channel, shutdown_channel))
-    errormonitor(@async localize(gps_channel, imu_channel, localization_state_channel, shutdown_channel))
+    # errormonitor(@async localize(gps_channel, imu_channel, localization_state_channel, shutdown_channel))
+    # errormonitor(@asyc perception(cam_channel, localization_state_channel, perception_state_channel, shutdown_channel))
+    # errormonitor(@async decision_making(localization_state_channel, perception_state_channel, shutdown_channel, map, target_road_segment_id, socket))
     errormonitor(@async test_algorithms(gt_channel, localization_state_channel, perception_state_channel, shutdown_channel, ego_vehicle_id))
 
     target_velocity = 0.0

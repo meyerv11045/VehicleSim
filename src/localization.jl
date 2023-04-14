@@ -43,7 +43,7 @@ function jac_hx(x, output_gps_measurement)
     gradient(state -> h(state, output_gps_measurement), x)[1]
 end
 
-function ekf_step(z, x̂, P̂, R_imu, R_gps, Δ=0.01)
+function ekf_step(z, x̂, P̂, Q, R_imu, R_gps, Δ=0.01)
     is_gps_measurement = isa(z, GPSMeasurement)
     if is_gps_measurement
         R = R_gps
