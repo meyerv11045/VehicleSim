@@ -22,19 +22,50 @@ struct Percept
     x::Vector{SimpleVehicleState}
 end
 
-function localize(gps_channel, imu_channel, localization_state_channel, shutdown_channel)
-    @info "Starting localization task..."
 
-    # TODO: Tune values to improve performance
-    # especially the velocity and angular velocity in the process covariance
-    # since our dynamics model does not take into account controls
+function matrix_to_quaternion(R)
+    w = sqrt(1 + R[1,1] + R[2,2] + R[3,3]) / 2
+    x = (R[3,2] - R[2,3]) / (4 * w)
+    y = (R[1,3] - R[3,1]) / (4 * w)
+    z = (R[2,1] - R[1,2]) / (4 * w)
+    q = [w, x, y, z]
+    return q
+end
+
+
+function localize(map, gps_channel, imu_channel, localization_state_channel, shutdown_channel)
+    @info "Starting localization task..."
 
     # Initial state and covariance p(x₀) ~ N(x₀, P₀)
     x₀ = zeros(13)
-    x₀[1:3] = [-91, -6, 2.6]
-    x₀[7] = 1 # quaternion corresponding to no rotation
 
-    P₀ = Diagonal(ones(13))  # Initial covariance (uncertainty)
+    # use first GPS measurement to get a decent prior on
+    # the initial p1, p2 position of the vehicle
+    init_gps_meas = take!(gps_channel)
+
+    t = [-3.0, 1, 2.6] # gps_loc_in_body
+    # gps_loc_in_map = [init_gps_meas.lat, init_gps_meas.long]
+    body_loc_in_map = [init_gps_meas.lat - t[1], init_gps_meas.long - t[2], 0]
+    x₀[1:3] = body_loc_in_map
+
+    road_id = cur_map_segment_of_vehicle(body_loc_in_map[1:2], map)
+    cur_segment = map[road_id]
+
+    lane_boundary = cur_segment.lane_boundaries[1]
+    b = lane_boundary.pt_b
+    a = lane_boundary.pt_a
+    dir = (b-a) / norm(b-a)
+    theta = atan(dir[2], dir[1]) # same results with dir[1], dir[2]
+
+    R = [cos(theta) -sin(theta) 0;
+         sin(theta) cos(theta) 0;
+         0 0 1]
+    q  = matrix_to_quaternion(R)
+    x₀[4:7] = q   # estimate of initial orientation
+
+    init = ones(13)
+    init[1:7] *= 50
+    P₀ = Diagonal(init)  # Initial covariance (uncertainty)
 
     # Process noise covariance
     Q = Diagonal(0.01*ones(13))
@@ -47,6 +78,7 @@ function localize(gps_channel, imu_channel, localization_state_channel, shutdown
     x̂ = x₀
     P̂ = P₀
 
+    last_update = time()
     while true
         sleep(0.001) # prevent thread from hogging resources & freezing other threads
         isready(shutdown_channel) && break
@@ -73,7 +105,10 @@ function localize(gps_channel, imu_channel, localization_state_channel, shutdown
                 R = imu_variance
             end
 
-            x̂, P̂ = ekf_step(z, x̂, P̂, Q, R)
+            Δ = meas.time - last_update
+
+            x̂, P̂ = ekf_step(z, x̂, P̂, Q, R, Δ)
+            last_update = meas.time
 
             localization_state = LocalizationEstimate(time(), x̂[1:3], x̂[4:7], x̂[8:10], x̂[11:13])
             if isready(localization_state_channel)
@@ -322,7 +357,7 @@ function test_client(host::IPAddr=IPv4(0), port=4444; v_step = 1.0, s_step = π/
     # does not raise an error though
     # so we have to press q to quit and code below will handle killing worker threads
     errormonitor(@async publish_socket_data_to_channels(socket, gps_channel, imu_channel, cam_channel, gt_channel, target_road_segment_channel, shutdown_channel))
-    errormonitor(@async localize(gps_channel, imu_channel, localization_state_channel, shutdown_channel))
+    errormonitor(@async localize(map_segments, gps_channel, imu_channel, localization_state_channel, shutdown_channel))
     # errormonitor(@asyc perception(cam_channel, localization_state_channel, perception_state_channel, shutdown_channel))
     if !use_keyboard
         # use gt channel instead of localization channel for testing purposes
