@@ -163,8 +163,8 @@ end
 function gps(vehicle, state_channel, meas_channel; sqrt_meas_cov = Diagonal([1.0, 1.0]), max_rate=60.0)
     min_Δ = 1.0/max_rate
     t = time()
-    T = get_gps_transform()
-    gps_loc_body = T*[zeros(3); 1.0]
+    T = get_gps_transform() # base -> GPS
+    gps_loc_body = T*[zeros(3); 1.0] # GPS Position (Not rotation) relative to base
     while true
         sleep(0.0001)
         state = fetch(state_channel)
@@ -173,8 +173,8 @@ function gps(vehicle, state_channel, meas_channel; sqrt_meas_cov = Diagonal([1.0
             t = tnow
             xyz_body = state.q[5:7] # position
             q_body = state.q[1:4] # quaternion
-            Tbody = get_body_transform(q_body, xyz_body)
-            xyz_gps = Tbody * [gps_loc_body; 1]
+            Tbody = get_body_transform(q_body, xyz_body) # World to base
+            xyz_gps = Tbody * [gps_loc_body; 1] # GPS Position relative to world frame
             meas = xyz_gps[1:2] + sqrt_meas_cov*randn(2)
             gps_meas = GPSMeasurement(t, meas[1], meas[2])
             put!(meas_channel, gps_meas)
@@ -237,33 +237,33 @@ function cameras(vehicles, state_channels, cam_channels; max_rate=10.0, focal_le
     num_vehicles = length(vehicles)
     vehicle_size = SVector(13.2, 5.7, 5.3)
 
-    T_body_cam1 = get_cam_transform(1)
-    T_body_cam2 = get_cam_transform(2)
-    T_cam_camrot = get_rotated_camera_transform()
+    T_body_cam1 = get_cam_transform(1) # base -> cam1
+    T_body_cam2 = get_cam_transform(2) # base ->cam2
+    T_cam_camrot = get_rotated_camera_transform() # cam-> image
 
-    T_body_camrot1 = multiply_transforms(T_body_cam1, T_cam_camrot)
-    T_body_camrot2 = multiply_transforms(T_body_cam2, T_cam_camrot)
+    T_body_camrot1 = multiply_transforms(T_body_cam1, T_cam_camrot) # base->image1
+    T_body_camrot2 = multiply_transforms(T_body_cam2, T_cam_camrot) # base->image2
 
     while true
         sleep(0.0001)
         states = [fetch(state_channels[id]) for id in 1:num_vehicles]
-        corners_body = [get_3d_bbox_corners(state, vehicle_size) for state in states]
+        corners_body = [get_3d_bbox_corners(state, vehicle_size) for state in states] # Giving 3D Bounding Box corners in world frame for other cars
         tnow = time()
         if tnow - t > min_Δ
             t = tnow
             for i = 1:num_vehicles
                 bboxes = []
                 ego_state = states[i]
-                T_world_body = get_body_transform(ego_state.q[1:4], ego_state.q[5:7])
-                T_world_camrot1 = multiply_transforms(T_world_body, T_body_camrot1)
-                T_world_camrot2 = multiply_transforms(T_world_body, T_body_camrot2)
-                T_camrot1_world = invert_transform(T_world_camrot1)
-                T_camrot2_world = invert_transform(T_world_camrot2)
+                T_world_body = get_body_transform(ego_state.q[1:4], ego_state.q[5:7]) # World -> Base
+                T_world_camrot1 = multiply_transforms(T_world_body, T_body_camrot1) # World -> Image1
+                T_world_camrot2 = multiply_transforms(T_world_body, T_body_camrot2) # World -> Image2
+                T_camrot1_world = invert_transform(T_world_camrot1) # Image1 -> World
+                T_camrot2_world = invert_transform(T_world_camrot2) # Image2 -> World
                 for (camera_id, transform) in zip((1,2), (T_camrot1_world, T_camrot2_world))
 
                     for j = 1:num_vehicles
                         j == i && continue
-                        other_vehicle_corners = [transform * [pt;1] for pt in corners_body[j]]
+                        other_vehicle_corners = [transform * [pt;1] for pt in corners_body[j]] # Vehicle corners in image frame (not image units)
                         visible = false
 
                         left = image_width/2
@@ -275,17 +275,19 @@ function cameras(vehicles, state_channels, cam_channels; max_rate=10.0, focal_le
                             if corner[3] < focal_len
                                 break
                             end
-                            px = focal_len*corner[1]/corner[3]
-                            py = focal_len*corner[2]/corner[3]
+                            px = focal_len*corner[1]/corner[3] # Finds vehicle corner x in pixel space
+                            py = focal_len*corner[2]/corner[3] # Finds vehicle corner y in pixel space
                             left = min(left, px)
                             right = max(right, px)
                             top = min(top, py)
                             bot = max(bot, py)
                         end
+                        # Out of the 8 bounding box corners, find the leftmost, rightmost, topmost and bottommost 
                         if top ≈ bot || left ≈ right || top > bot || left > right
                             # out of frame
                             continue
                         else
+                            # Normalizes the pixels
                             top = convert_to_pixel(image_height, pixel_len, top)
                             bot = convert_to_pixel(image_height, pixel_len, bot)
                             left = convert_to_pixel(image_width, pixel_len, left)
