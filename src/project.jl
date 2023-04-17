@@ -32,6 +32,22 @@ function matrix_to_quaternion(R)
     return q
 end
 
+function get_driving_dir_of_road_seg(road_segment_id, map)
+    # tested and verified with map segment 101 which should have driving dir
+    # of [-1, 0] in map frame which corresponds to θ = π
+
+    # also tested and verified with vehicle's initial position in sim with 1
+    # vehicle. θ = π/2 which corresponds to driving dir of [0, 1] in map frame
+    cur_segment = map[road_segment_id]
+
+    lane_boundary = cur_segment.lane_boundaries[1]
+    b = lane_boundary.pt_b
+    a = lane_boundary.pt_a
+    dir = (b-a) / norm(b-a)
+    θ = atan(dir[2], dir[1])
+    return θ
+end
+
 
 function localize(map, gps_channel, imu_channel, localization_state_channel, shutdown_channel)
     @info "Starting localization task..."
@@ -39,32 +55,31 @@ function localize(map, gps_channel, imu_channel, localization_state_channel, shu
     # Initial state and covariance p(x₀) ~ N(x₀, P₀)
     x₀ = zeros(13)
 
-    # use first GPS measurement to get a decent prior on
-    # the initial p1, p2 position of the vehicle
+    # use first GPS measurement to get a storng prior on initial position + orientation
     init_gps_meas = take!(gps_channel)
 
-    t = [-3.0, 1, 2.6] # gps_loc_in_body
-    # gps_loc_in_map = [init_gps_meas.lat, init_gps_meas.long]
-    body_loc_in_map = [init_gps_meas.lat - t[1], init_gps_meas.long - t[2], 0]
-    x₀[1:3] = body_loc_in_map
+    t = [-3.0, 1, 2.6] # gps sensor in reference to the body frame
+    xy_gps_in_map = [init_gps_meas.lat, init_gps_meas.long]
 
-    road_id = cur_map_segment_of_vehicle(body_loc_in_map[1:2], map)
-    cur_segment = map[road_id]
+    road_id = cur_map_segment_of_vehicle(xy_gps_in_map, map)
+    θ = get_driving_dir_of_road_seg(road_id, map)
 
-    lane_boundary = cur_segment.lane_boundaries[1]
-    b = lane_boundary.pt_b
-    a = lane_boundary.pt_a
-    dir = (b-a) / norm(b-a)
-    theta = atan(dir[2], dir[1]) # same results with dir[1], dir[2]
-
-    R = [cos(theta) -sin(theta) 0;
-         sin(theta) cos(theta) 0;
-         0 0 1]
-    q  = matrix_to_quaternion(R)
+    # rotate from map frame to estimate of body's orientation in map frame
+    R_3D = [cos(θ) -sin(θ) 0;
+            sin(θ) cos(θ) 0;
+            0 0 1]
+    q  = matrix_to_quaternion(R_3D)
     x₀[4:7] = q   # estimate of initial orientation
 
+    R_2D = [cos(θ) -sin(θ);
+            sin(θ) cos(θ)]
+
+    # need to apply the rotation to the translation, not the point in map frame
+    xy_body_in_map = xy_gps_in_map - R_2D*t[1:2]
+
+    x₀[1:2] = xy_body_in_map
+
     init = ones(13)
-    init[1:7] *= 50
     P₀ = Diagonal(init)  # Initial covariance (uncertainty)
 
     # Process noise covariance
