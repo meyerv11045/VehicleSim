@@ -182,6 +182,7 @@ function sim_car(cmd_channel, state_channel, shutdown_channel, vehicle, vehicle_
 
     chevy = vehicle.chevy
     state = vehicle.state
+    
     mviss = vehicle.mviss
 
     v = 0.0

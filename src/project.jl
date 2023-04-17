@@ -8,6 +8,16 @@ struct SimpleVehicleState
     h::Float64
 end
 
+struct OtherVehicleStates
+    p1::Float64
+    p2::Float64
+    θ::Float64
+    v::Float64
+    l::Float64
+    w::Float64
+    h::Float64
+end
+
 # for use with the ego vehicles
 struct LocalizationEstimate
     time::Float64
@@ -19,7 +29,7 @@ end
 
 struct Percept
     last_update::Float64
-    x::Vector{SimpleVehicleState}
+    x::Vector{OtherVehicleStates}
 end
 
 function localize(gps_channel, imu_channel, localization_state_channel, shutdown_channel)
@@ -103,9 +113,14 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
     # Loop through each bounding box, find center of vehicle in image frame and multiply by body transform
     # Store vehicle in perception state list, but have vehicle be 1.5x
     @info "Starting perception task..."
+    vehicle_size = SVector(13.2, 5.7, 5.3)
+    num_vehicles = 0
+    prev_bbs_and_states = Dict()
+    prev_bbs_and_covars = Dict()
     # set up stuff
     while true
         sleep(0.001) # prevent thread from hogging resources & freezing other threads
+        
         isready(shutdown_channel) && break
 
         fresh_cam_meas = []
@@ -113,12 +128,84 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
             meas = take!(cam_meas_channel)
             push!(fresh_cam_meas, meas)
         end
-
+ 
         latest_localization_state = fetch(localization_state_channel)
+        vector_localization = [latest_localization_state.position[1:3];latest_localization_state.quaternion[1:4]]
+        priors = []
+        if(num_vehicles > 0)
+            priors = fetch(perception_state_channel).x
+        end
+        @info priors
+        #@info size(fresh_cam_meas)
+        latest_relevant_meas = []
+        got_latest_meas = false
+        bb_and_prior_map = Dict()
+        bb_and_prior_covar_map = Dict()
+        image_width = 0
+        image_height = 0
+        focal_length = 0
+        pixel_len = 0
+        for meas in fresh_cam_meas
+            #@info size(meas.bounding_boxes)
+            if(size(meas.bounding_boxes)[1] == 2 && meas.camera_id == 2 && !got_latest_meas)
+                latest_relevant_meas = meas
+                got_latest_meas = true
+                #@info meas.bounding_boxes
+                camera_1_bb = meas.bounding_boxes[1]
+                camera_2_bb = meas.bounding_boxes[2]
+                image_width = meas.image_width
+                image_height = meas.image_height
+                focal_length = meas.focal_length
+                pixel_len = meas.pixel_length
+                full_meas = [camera_1_bb;camera_2_bb]
 
+                if(num_vehicles == 0)
+                    prior_p1 = latest_localization_state.position[1] + vehicle_size[1] * 1.5
+                    prior_p2 = latest_localization_state.position[2] + vehicle_size[2] * 1.5
+                    prior_theta = atan(2 * (latest_localization_state.quaternion[1] * latest_localization_state.quaternion[4] + latest_localization_state.quaternion[2] * latest_localization_state.quaternion[3]),1 - 2 * (latest_localization_state.quaternion[3]^2 + latest_localization_state.quaternion[4]^2))
+                    prior_velocity = 0
+                    prior_l = vehicle_size[1]
+                    prior_w = vehicle_size[2]
+                    prior_h = vehicle_size[3]
+                    prior = OtherVehicleStates(prior_p1,prior_p2,prior_theta,prior_velocity,prior_l,prior_w,prior_h)
+                    push!(priors,prior)
+                    bb_and_prior_map[full_meas] = prior
+                    bb_and_prior_covar_map[full_meas] = Diagonal([vehicle_size[1]^2; vehicle_size[1]^2; 0.2^2; 0.5^2; 0.0001^2; 0.0001^2; 0.0001^2])
+                else
+                    for (prev_bb,prev_state) in prev_bbs_and_states
+                        # Matching algo here
+                    end
+                end 
+            end
+        end
+        empty!(prev_bbs_and_states)
+        empty!(prev_bbs_and_covars)
+        num_vehicles = 0
+        vehicle_states = []
+        for(bb,prior) in bb_and_prior_map
+            vector_prior = [prior.p1;prior.p2;prior.θ;prior.v;prior.l;prior.w;prior.h]
+            state = vector_prior
+            covar = bb_and_prior_covar_map[bb]
+            Q = Diagonal([1, 1, 1, 1, 0.0001, 0.0001, 0.0001])
+            R = Diagonal([0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01])
+            new_x,new_covar = perception_ekf_step(bb,state,covar,Q,R,vector_localization,image_width,image_height,focal_length,pixel_len)
+            prev_bbs_and_states[bb] = new_x
+            prev_bbs_and_covars[bb] = new_covar
+            vehicle_state = OtherVehicleStates(new_x[1],new_x[2],new_x[3],new_x[4],new_x[5],new_x[6],new_x[7])
+            push!(vehicle_states,vehicle_state)
+            num_vehicles = num_vehicles + 1
+        end
+        #= for (prev_bb,prev_state) in prev_bbs_and_states
+            @info "State"
+            @info prev_bbs_and_states[prev_bb]
+            @info "Covar"
+            @info prev_bbs_and_covars[prev_bb]
+        end =#
+        #@info "Perception attempt start"
+        #@info latest_localization_state
         # process bounding boxes / run ekf / do what you think is good
-
-        perception_state = Percept(0.0, [])
+        #@info "Perception attempt end"
+        perception_state = Percept(time(), vehicle_states)
         if isready(perception_state_channel)
             take!(perception_state_channel)
         end
@@ -195,12 +282,13 @@ function test_algorithms(gt_channel,
     localization_state_channel,
     perception_state_channel,
     shutdown_channel,
+    gt_localization_state_channel,
     ego_vehicle_id)
     @info "Starting testing task..."
 
     # estimated_vehicle_states = Dict{Int, Tuple{Float64, Union{SimpleVehicleState, LocalizationEstimate}}}()
     gt_vehicle_states = Dict{Int, GroundTruthMeasurement}()
-
+    
     # only start testing after we have received the first ground truth measurement
     wait(gt_channel)
 
@@ -219,9 +307,13 @@ function test_algorithms(gt_channel,
                 gt_vehicle_states[id] = meas
             end
         end
-
         latest_est_ego_state = fetch(localization_state_channel)
         latest_gt_ego_state = gt_vehicle_states[ego_vehicle_id]
+        gt_localization_state = LocalizationEstimate(latest_gt_ego_state.time, latest_gt_ego_state.position, latest_gt_ego_state.orientation, latest_gt_ego_state.velocity, latest_gt_ego_state.angular_velocity)
+        if isready(gt_localization_state_channel)
+            take!(gt_localization_state_channel)
+        end
+        put!(gt_localization_state_channel, gt_localization_state)
         if latest_est_ego_state.time < latest_gt_ego_state.time - 0.5
             @warn "Localization algorithm stale."
         else
@@ -333,18 +425,19 @@ function test_client(host::IPAddr=IPv4(0), port=4444; v_step = 1.0, s_step = π/
 
     localization_state_channel = Channel{LocalizationEstimate}(1)
     perception_state_channel = Channel{Percept}(1)
+    gt_localization_state_channel = Channel{LocalizationEstimate}(1)
 
     # wrap worker threads in error monitor to print any errors
     # does not raise an error though
     # so we have to press q to quit and code below will handle killing worker threads
     errormonitor(@async publish_socket_data_to_channels(socket, gps_channel, imu_channel, cam_channel, gt_channel, target_road_segment_channel, shutdown_channel))
     errormonitor(@async localize(gps_channel, imu_channel, localization_state_channel, shutdown_channel))
-    # errormonitor(@asyc perception(cam_channel, localization_state_channel, perception_state_channel, shutdown_channel))
+    errormonitor(@async perception(cam_channel, gt_localization_state_channel, perception_state_channel, shutdown_channel))
     if !use_keyboard
         # use gt channel instead of localization channel for testing purposes
         errormonitor(@async decision_making(gt_channel, perception_state_channel, target_road_segment_channel, shutdown_channel, map_segments, socket))
     end
-    errormonitor(@async test_algorithms(gt_channel, localization_state_channel, perception_state_channel, shutdown_channel, ego_vehicle_id))
+    errormonitor(@async test_algorithms(gt_channel, localization_state_channel, perception_state_channel, shutdown_channel, gt_localization_state_channel, ego_vehicle_id))
 
     target_velocity = 0.0
     steering_angle = 0.0

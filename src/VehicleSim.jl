@@ -31,6 +31,7 @@ include("map.jl")
 
 include("project.jl")
 include("localization.jl")
+include("perception.jl")
 include("routing.jl")
 
 export server, shutdown!, keyboard_client, test_client

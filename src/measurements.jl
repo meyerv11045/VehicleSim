@@ -111,6 +111,19 @@ function get_rotated_camera_transform()
     [R t]
 end
 
+function get_differentiable_cam_transform(camera_id)
+    # TODO load this from URDF
+    R_cam_to_body = [0.9998 0.0 0.0199987;
+                     0.0    1.0      0.0;
+                     -0.0199987 0.0 0.9998]
+    t_cam_to_body = [1.35, 1.7, 2.4]
+    if camera_id == 2
+        t_cam_to_body = [1.35, -1.7, 2.4]
+    end
+
+    T = [R_cam_to_body t_cam_to_body]
+end
+
 function get_cam_transform(camera_id)
     # TODO load this from URDF
     R_cam_to_body = RotY(0.02)
@@ -231,6 +244,12 @@ function convert_to_pixel(num_pixels, pixel_len, px)
     return pix_id
 end
 
+function convert_to_pixel_differentiable(num_pixels, pixel_len, px)
+    min_val = -pixel_len*num_pixels/2
+    pix_id = ((px - min_val) / pixel_len) + 1
+    return pix_id
+end
+
 function cameras(vehicles, state_channels, cam_channels; max_rate=10.0, focal_len = 0.01, pixel_len = 0.001, image_width = 640, image_height = 480)
     min_Δ = 1.0/max_rate
     t = time()
@@ -291,7 +310,7 @@ function cameras(vehicles, state_channels, cam_channels; max_rate=10.0, focal_le
                             top = convert_to_pixel(image_height, pixel_len, top)
                             bot = convert_to_pixel(image_height, pixel_len, bot)
                             left = convert_to_pixel(image_width, pixel_len, left)
-                            top = convert_to_pixel(image_width, pixel_len, right)
+                            right = convert_to_pixel(image_width, pixel_len, right)
                             push!(bboxes, SVector(top, left, bot, right))
                         end
                     end
