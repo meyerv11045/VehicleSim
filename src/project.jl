@@ -120,7 +120,6 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
 	# set up stuff
 	while true
 		sleep(0.001) # prevent thread from hogging resources & freezing other threads
-
 		isready(shutdown_channel) && break
 
 		fresh_cam_meas = []
@@ -130,11 +129,30 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
 		end
 
 		latest_localization_state = fetch(localization_state_channel)
+		#@info "Localization"
+		#@info latest_localization_state
+		vehicle_2_state = LocalizationEstimate(1.68188650652e9, [-91.6639496981265, -5.001254676640403, 2.6455622444987403], [0.7070991651229994, 0.0038137895043521652, -0.003038500205406931, 0.7070975839362454], [6.04446209702472e-18, 5.44780420863507e-13, -1.5646262355470607e-13], [-1.950424201033533e-13, 2.7176003305590663e-15, 1.4592923169556237e-15])
+		
 		vector_localization = [latest_localization_state.position[1:3]; latest_localization_state.quaternion[1:4]]
+		vehicle2_1 = vehicle_2_state.position[1]
+		vehicle2_2 = vehicle_2_state.position[2]
+		vehicle2_3 = atan(
+			2 * (vehicle_2_state.quaternion[1] * vehicle_2_state.quaternion[4] + vehicle_2_state.quaternion[2] * vehicle_2_state.quaternion[3]),
+			1 - 2 * (vehicle_2_state.quaternion[3]^2 + vehicle_2_state.quaternion[4]^2),
+		)
+		vehicle2_4 = vehicle_2_state.linear_vel[1]
+		vehicle2_5 = vehicle_size[1]
+		vehicle2_6 = vehicle_size[2]
+		vehicle2_7 = vehicle_size[3]
+		vehicle2_meas = h1([vehicle2_1,vehicle2_2,vehicle2_3,vehicle2_4,vehicle2_5,vehicle2_6,vehicle2_7], vector_localization,640,480,0.01,0.001)
+		#@info "Vehicle 2 meas"
+		#@info vehicle2_meas
 		priors = []
 		if (num_vehicles > 0)
 			priors = fetch(perception_state_channel).x
 		end
+		@info "Priors"
+		@info priors
 		#@info size(fresh_cam_meas)
 		latest_relevant_meas = []
 		got_latest_meas = false
@@ -144,14 +162,102 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
 		image_height = 0
 		focal_length = 0
 		pixel_len = 0
+		# Test cases: No vehicles and 2 measurements
+		# 2 prior vehicles and 2 measurements
+		# 1 prior vehicle and 3 measurements
+		# 3 prior vehicles and 1 measurement
 		for meas in fresh_cam_meas
+			num_meas = size(meas.bounding_boxes)[1]
 			#@info size(meas.bounding_boxes)
-			if (size(meas.bounding_boxes)[1] == 2 && meas.camera_id == 2 && !got_latest_meas)
+			if (num_meas % 2 == 0 && num_meas > 0 && meas.camera_id == 2 && !got_latest_meas)
+				# Got 2 camera measurements
 				latest_relevant_meas = meas
-
+				#@info "Latest meas"
+				#@info latest_relevant_meas
 				got_latest_meas = true
+				new_vehicles = max(0,num_meas/2 - num_vehicles)
+				# Maps the min bounding box distance to that bounding box idnex
+				bb_distances = Dict()
+				new_bbs = []
+				# Map each measurement to a prior
+				for meas_index = 1:2:num_meas
+					camera1_bb = latest_relevant_meas.bounding_boxes[meas_index]
+					camera2_bb = latest_relevant_meas.bounding_boxes[meas_index+1]
+					image_width = latest_relevant_meas.image_width
+					image_height = latest_relevant_meas.image_height
+					focal_length = latest_relevant_meas.focal_length
+					pixel_len = latest_relevant_meas.pixel_length
+					full_meas = [camera1_bb; camera2_bb]
+					min_distance = 1000000
+					min_prev_bb = []
+					got_prev = false
+					for(prev_bb,prev_state) in prev_bbs_and_states
+						got_prev = true
+						diff = norm(full_meas - prev_bb)
+						if (diff < min_distance)
+							min_distance = diff
+							min_prev_bb = prev_bb
+						end
+					end
+					if(got_prev)
+						bb_distances[min_distance] = full_meas
+						bb_and_prior_map[full_meas] = OtherVehicleStates(prev_bbs_and_states[min_prev_bb][1], prev_bbs_and_states[min_prev_bb][2], prev_bbs_and_states[min_prev_bb][3],
+						prev_bbs_and_states[min_prev_bb][4], prev_bbs_and_states[min_prev_bb][5], prev_bbs_and_states[min_prev_bb][6], prev_bbs_and_states[min_prev_bb][7])
+						bb_and_prior_covar_map[full_meas] = prev_bbs_and_covars[min_prev_bb]
+					else
+						push!(new_bbs,full_meas)
+					end
+					
+				end
+
+				sorted_bb_distances_keys = sort(collect(keys(bb_distances)), rev=true)
+				# Removes bad box prior pairs
+				for repeat_index = 1:trunc(Int,num_meas/2-new_vehicles)-1
+					push!(new_bbs,bb_distances[sorted_bb_distances_keys[repeat_index]])
+					delete!(bb_and_prior_map,bb_distances[sorted_bb_distances_keys[repeat_index]])
+				end
+
+				for new_vehicle_index = 1:trunc(Int,new_vehicles)
+					prior_p1 = latest_localization_state.position[1] + vehicle_size[1] * 1.5
+					prior_p2 = latest_localization_state.position[2] + vehicle_size[2] * 1.5
+					prior_theta = atan(
+						2 * (latest_localization_state.quaternion[1] * latest_localization_state.quaternion[4] + latest_localization_state.quaternion[2] * latest_localization_state.quaternion[3]),
+						1 - 2 * (latest_localization_state.quaternion[3]^2 + latest_localization_state.quaternion[4]^2),
+					)
+					prior_velocity = 0
+					prior_l = vehicle_size[1]
+					prior_w = vehicle_size[2]
+					prior_h = vehicle_size[3]
+					prior = OtherVehicleStates(prior_p1, prior_p2, prior_theta, prior_velocity, prior_l, prior_w, prior_h)
+					push!(priors, prior)
+					bb_and_prior_map[new_bbs[new_vehicle_index]] = prior
+					bb_and_prior_covar_map[new_bbs[new_vehicle_index]] = Diagonal([vehicle_size[1]^2; vehicle_size[1]^2; 0.2^2; 0.5^2; 0.0001^2; 0.0001^2; 0.0001^2])
+				end
+				current_bbs_and_states = Dict()
+				current_bbs_and_covars = Dict()
+				num_vehicles = length(bb_and_prior_map)
+				vehicle_states = []
+				for (bb, prior) in bb_and_prior_map
+					vector_prior = [prior.p1; prior.p2; prior.θ; prior.v; prior.l; prior.w; prior.h]
+					state = vector_prior
+					covar = bb_and_prior_covar_map[bb]
+					Q = Diagonal([1, 1, 1, 1, 0.0001, 0.0001, 0.0001])
+					R = Diagonal([0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01])
+					new_x, new_covar = perception_ekf_step(bb, state, covar, Q, R, vector_localization, image_width, image_height, focal_length, pixel_len)
+					current_bbs_and_states[bb] = new_x
+					current_bbs_and_covars[bb] = new_covar
+					vehicle_state = OtherVehicleStates(new_x[1], new_x[2], new_x[3], new_x[4], new_x[5], new_x[6], new_x[7])
+					push!(vehicle_states, vehicle_state)
+				end
+				perception_state = Percept(time(), vehicle_states)
+				if isready(perception_state_channel)
+					take!(perception_state_channel)
+				end
+				put!(perception_state_channel, perception_state)
+				prev_bbs_and_states = current_bbs_and_states
+				prev_bbs_and_covars = current_bbs_and_covars
 				#@info meas.bounding_boxes
-				camera_1_bb = meas.bounding_boxes[1]
+				#= camera_1_bb = meas.bounding_boxes[1]
 				camera_2_bb = meas.bounding_boxes[2]
 				image_width = meas.image_width
 				image_height = meas.image_height
@@ -210,7 +316,7 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
 				if isready(perception_state_channel)
 					take!(perception_state_channel)
 				end
-				put!(perception_state_channel, perception_state)
+				put!(perception_state_channel, perception_state) =#
 
 			end
 
@@ -325,7 +431,9 @@ function test_algorithms(gt_channel,
 			end
 		end
 		latest_est_ego_state = fetch(localization_state_channel)
+		
 		latest_gt_ego_state = gt_vehicle_states[ego_vehicle_id]
+
 		gt_localization_state = LocalizationEstimate(latest_gt_ego_state.time, latest_gt_ego_state.position, latest_gt_ego_state.orientation, latest_gt_ego_state.velocity, latest_gt_ego_state.angular_velocity)
 		if isready(gt_localization_state_channel)
 			take!(gt_localization_state_channel)
@@ -346,7 +454,9 @@ function test_algorithms(gt_channel,
 		end
 
 		latest_perception_state = fetch(perception_state_channel)
-		last_perception_update = latest_perception_state.last_update
+		#@info "Perception update"
+		#@info latest_perception_state.x
+		#= last_perception_update = latest_perception_state.last_update
 		vehicles = latest_perception_state.x
 
 		for vehicle in vehicles
@@ -375,12 +485,12 @@ function test_algorithms(gt_channel,
 				# compare estimated to true size
 				estimated_size = [vehicle.l, vehicle.w, vehicle.h]
 				actual_size = paired_gt_vehicle.size
-                estimated_position = [vehicle.p1, vehicle.p2]
-                actual_position = paired_gt_vehicle.position[1:2]
+				estimated_position = [vehicle.p1, vehicle.p2]
+				actual_position = paired_gt_vehicle.position[1:2]
 				@info "Estimated size error: $(norm(actual_size-estimated_size))"
-                #@info "Estimated position error: $(norm(actual_position-estimated_position))"
+				#@info "Estimated position error: $(norm(actual_position-estimated_position))"
 			end
-		end
+		end =#
 	end
 	@info "Terminated testing task."
 end

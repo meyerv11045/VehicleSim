@@ -262,7 +262,6 @@ function cameras(vehicles, state_channels, cam_channels; max_rate=10.0, focal_le
 
     T_body_camrot1 = multiply_transforms(T_body_cam1, T_cam_camrot) # base->image1
     T_body_camrot2 = multiply_transforms(T_body_cam2, T_cam_camrot) # base->image2
-
     while true
         sleep(0.0001)
         states = [fetch(state_channels[id]) for id in 1:num_vehicles]

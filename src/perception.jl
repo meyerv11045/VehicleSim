@@ -1,6 +1,5 @@
 # Process Model
 function perception_ekf_step(z, state, covar, Q, R, ego_state, image_width,image_height,focal_length,pixel_len,dt = 0.01)
-
 	x_hat = perception_f(state, dt)
 	F = perception_jac_fx(state, dt)
 	covar_hat = F * covar * F' + Q
@@ -364,10 +363,14 @@ function perception_f(x, dt)
 end
 
 function h1(x, ego_state,image_width,image_height,focal_len,pixel_len)
-	T = [cos(x[3]) -sin(x[3]) 0 x[1]
-		 sin(x[3])  cos(x[3]) 0 x[2]
-		 0 0 1 ego_state[3]
-		 0 0 0 1]
+    #@info "X"
+    #@info x
+    T = [cos(x[3]) -sin(x[3]) 0 x[1]
+         sin(x[3]) cos(x[3]) 0 x[2]
+         0 0 1 ego_state[3]
+         0 0 0 1]
+    #@info "T"
+    #@info T
 	corners = []
     meas = []
 	for dx in [-x[5] / 2, x[5] / 2]
@@ -377,6 +380,9 @@ function h1(x, ego_state,image_width,image_height,focal_len,pixel_len)
 			end
 		end
 	end
+    #@info "Corners"
+    #@info corners
+    
 	T_world_body = get_body_transform(ego_state[4:7], ego_state[1:3]) # World -> Base
 	T_body_cam1 = get_cam_transform(1)
 	T_body_cam2 = get_cam_transform(2)
@@ -386,6 +392,14 @@ function h1(x, ego_state,image_width,image_height,focal_len,pixel_len)
 	T_world_camrot1 = multiply_transforms(T_world_body, T_body_camrot1)
 	T_world_camrot2 = multiply_transforms(T_world_body, T_body_camrot2)
 	T_camrot1_world = invert_transform(T_world_camrot1)
+    #@info "T world body"
+    #@info T_world_body
+    #@info "T body cam1"
+    #@info T_body_cam1
+    #@info "T cam camrot"
+    #@info T_cam_camrot
+    #@info "T camrot1 world"
+    #@info T_camrot1_world
 	T_camrot2_world = invert_transform(T_world_camrot2)
 	i = 1
 	for (camera_id, transform) in zip((1, 2), (T_camrot1_world, T_camrot2_world))
