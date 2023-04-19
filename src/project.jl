@@ -151,7 +151,6 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
 		if (num_vehicles > 0)
 			priors = fetch(perception_state_channel).x
 		end
-		@info "Priors"
 		@info priors
 		#@info size(fresh_cam_meas)
 		latest_relevant_meas = []
@@ -172,8 +171,6 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
 			if (num_meas % 2 == 0 && num_meas > 0 && meas.camera_id == 2 && !got_latest_meas)
 				# Got 2 camera measurements
 				latest_relevant_meas = meas
-				#@info "Latest meas"
-				#@info latest_relevant_meas
 				got_latest_meas = true
 				new_vehicles = max(0,num_meas/2 - num_vehicles)
 				# Maps the min bounding box distance to that bounding box idnex
@@ -218,12 +215,16 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
 				end
 
 				for new_vehicle_index = 1:trunc(Int,new_vehicles)
-					prior_p1 = latest_localization_state.position[1] + vehicle_size[1] * 1.5
-					prior_p2 = latest_localization_state.position[2] + vehicle_size[2] * 1.5
+					the_new_meas_for_new_vehicle = new_bbs[new_vehicle_index]
+					the_pixel_width = the_new_meas_for_new_vehicle[4] - the_new_meas_for_new_vehicle[2]
+					fake_distance = -3.7 * the_pixel_width + 47.4
 					prior_theta = atan(
 						2 * (latest_localization_state.quaternion[1] * latest_localization_state.quaternion[4] + latest_localization_state.quaternion[2] * latest_localization_state.quaternion[3]),
 						1 - 2 * (latest_localization_state.quaternion[3]^2 + latest_localization_state.quaternion[4]^2),
 					)
+					prior_p1 = latest_localization_state.position[1] + fake_distance * cos(prior_theta)#vehicle_size[1] * 1.5
+					prior_p2 = latest_localization_state.position[2] + fake_distance * sin(prior_theta)#vehicle_size[2] * 1.5
+					
 					prior_velocity = 0
 					prior_l = vehicle_size[1]
 					prior_w = vehicle_size[2]
