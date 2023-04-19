@@ -23,10 +23,12 @@ function f(x, Δt)
     sₙ = quaternion[1]
     vₙ = quaternion[2:4]
 
+    R = Rot_from_quat(quaternion)
+
     s = sₙ*sᵣ - vₙ'*vᵣ
     v = sₙ*vᵣ+sᵣ*vₙ+vₙ×vᵣ
 
-    new_position = position + Δt * velocity
+    new_position = position + Δt * R * velocity
     new_quaternion = [s; v]
     return [new_position; new_quaternion; velocity; angular_vel]
 end

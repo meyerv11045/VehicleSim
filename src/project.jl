@@ -79,15 +79,25 @@ function localize(map, gps_channel, imu_channel, localization_state_channel, shu
 
     x₀[1:2] = xy_body_in_map
 
+    # for testing, if we want to init with correct gt pose
+    # init_pose = fetch(gt_channel) # throw away the first measurement
+    # init_gps = fetch(gps_channel)
+    # x₀[1:3] = init_pose.position
+    # x₀[4:7] = init_pose.orientation
+    # x₀[8:10] = init_pose.velocity
+    # x₀[11:13] = init_pose.angular_velocity
+
     init = ones(13)
+    init[4:7] .= 0.001
     P₀ = Diagonal(init)  # Initial covariance (uncertainty)
 
     # Process noise covariance
-    Q = Diagonal(0.01*ones(13))
+    # trust the process model a lot!!
+    Q = Diagonal(0.00001*ones(13))
 
     # Measurement noise covariance (taken from the generator functions)
-    imu_variance = Diagonal([0.01, 0.01, 0.01, 0.01, 0.01, 0.01].^2)
-    gps_variance = Diagonal([1.0, 1.0].^2)
+    imu_variance = Diagonal([0.1, 0.1, 0.1, 0.1, 0.1, 0.1].^2)
+    gps_variance = Diagonal([10.0, 10.0].^2)
 
     # Initialize the estimate of the state
     x̂ = x₀
@@ -225,6 +235,13 @@ function isfull(ch::Channel)
     length(ch.data) ≥ ch.sz_max
 end
 
+function quaternion_to_euler(q)
+    yaw = atan(2*q[4]*q[3] + 2*q[1]*q[2], 1 - 2*q[2]^2 - 2*q[3]^2)
+    pitch = asin(2*q[4]*q[2] - 2*q[1]*q[3])
+    roll = atan(2*q[4]*q[1] + 2*q[2]*q[3], 1 - 2*q[1]^2 - 2*q[2]^2)
+    return (roll, pitch, yaw)
+end
+
 function test_algorithms(gt_channel,
     localization_state_channel,
     perception_state_channel,
@@ -237,7 +254,7 @@ function test_algorithms(gt_channel,
 
     # only start testing after we have received the first ground truth measurement
     wait(gt_channel)
-
+    first_est = true
     t = time()
     while true
         sleep(0.001) # prevent thread from hogging resources & freezing other threads
@@ -261,12 +278,41 @@ function test_algorithms(gt_channel,
         else
             estimated_xyz = latest_est_ego_state.position
             true_xyz = latest_gt_ego_state.position
-            position_error = norm(estimated_xyz - true_xyz)
+
+            estimated_v = latest_est_ego_state.linear_vel
+            true_v = latest_gt_ego_state.velocity
+
+            estimated_q = latest_est_ego_state.quaternion
+            true_q = latest_gt_ego_state.orientation
+
+
+            position_error = norm(estimated_xyz[1:2] - true_xyz[1:2])
+            vel_error = norm(estimated_v[1:2] - true_v[1:2])
+
             t2 = time()
-            if t2 - t > 5.0
-                @info "Localization position error: $position_error"
-                @info "estimated: $estimated_xyz | true: $true_xyz"
+            if t2 - t > 2.5 || first_est
+                @info "------------------------------"
+                @info @sprintf "Localization xy position error: %.3f" position_error
+                @info @sprintf "x: %.2f | %.2f" estimated_xyz[1] true_xyz[1]
+                @info @sprintf "y: %.2f | %.2f" estimated_xyz[2] true_xyz[2]
+                # @info "z: $(estimated_xyz[3]) | $(true_xyz[3])"
+
+                @info "orientation (est vs ground truth)"
+                @info estimated_q
+                @info true_q
+                # @info @sprintf "Localization orientation error: %.3f" orientation_error
+                # @info @sprintf "roll: %.2f | %.2f" roll_e roll_t
+                # @info @sprintf "pitch: %.2f | %.2f" pitch_e pitch_t
+                # @info @sprintf "yaw: %.2f | %.2f" yaw_e yaw_t
+
+                @info @sprintf "Localization xy velocity error: %.3f" vel_error
+                @info @sprintf "v_x: %.2f | %.2f" estimated_v[1] true_v[1]
+                @info @sprintf "v_y: %.2f | %.2f" estimated_v[2] true_v[2]
+                # @info "v_z: $(estimated_v[3]) | $(true_v[3])"
+
+                # @info "estimated: $estimated_xyz | true: $true_xyz"
                 t = t2
+                first_est = false
             end
         end
 
