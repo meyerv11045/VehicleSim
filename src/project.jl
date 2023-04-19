@@ -131,8 +131,14 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
 		latest_localization_state = fetch(localization_state_channel)
 		#@info "Localization"
 		#@info latest_localization_state
-		vehicle_2_state = LocalizationEstimate(1.68188650652e9, [-91.6639496981265, -5.001254676640403, 2.6455622444987403], [0.7070991651229994, 0.0038137895043521652, -0.003038500205406931, 0.7070975839362454], [6.04446209702472e-18, 5.44780420863507e-13, -1.5646262355470607e-13], [-1.950424201033533e-13, 2.7176003305590663e-15, 1.4592923169556237e-15])
-		
+		vehicle_2_state = LocalizationEstimate(
+			1.68188650652e9,
+			[-91.6639496981265, -5.001254676640403, 2.6455622444987403],
+			[0.7070991651229994, 0.0038137895043521652, -0.003038500205406931, 0.7070975839362454],
+			[6.04446209702472e-18, 5.44780420863507e-13, -1.5646262355470607e-13],
+			[-1.950424201033533e-13, 2.7176003305590663e-15, 1.4592923169556237e-15],
+		)
+
 		vector_localization = [latest_localization_state.position[1:3]; latest_localization_state.quaternion[1:4]]
 		vehicle2_1 = vehicle_2_state.position[1]
 		vehicle2_2 = vehicle_2_state.position[2]
@@ -144,14 +150,14 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
 		vehicle2_5 = vehicle_size[1]
 		vehicle2_6 = vehicle_size[2]
 		vehicle2_7 = vehicle_size[3]
-		vehicle2_meas = h1([vehicle2_1,vehicle2_2,vehicle2_3,vehicle2_4,vehicle2_5,vehicle2_6,vehicle2_7], vector_localization,640,480,0.01,0.001)
+		vehicle2_meas = h1([vehicle2_1, vehicle2_2, vehicle2_3, vehicle2_4, vehicle2_5, vehicle2_6, vehicle2_7], vector_localization, 640, 480, 0.01, 0.001)
 		#@info "Vehicle 2 meas"
 		#@info vehicle2_meas
 		priors = []
 		if (num_vehicles > 0)
 			priors = fetch(perception_state_channel).x
 		end
-		@info priors
+		#@info priors
 		#@info size(fresh_cam_meas)
 		latest_relevant_meas = []
 		got_latest_meas = false
@@ -172,12 +178,12 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
 				# Got 2 camera measurements
 				latest_relevant_meas = meas
 				got_latest_meas = true
-				new_vehicles = max(0,num_meas/2 - num_vehicles)
+				new_vehicles = max(0, num_meas / 2 - num_vehicles)
 				# Maps the min bounding box distance to that bounding box idnex
 				bb_distances = Dict()
 				new_bbs = []
 				# Map each measurement to a prior
-				for meas_index = 1:2:num_meas
+				for meas_index ∈ 1:2:num_meas
 					camera1_bb = latest_relevant_meas.bounding_boxes[meas_index]
 					camera2_bb = latest_relevant_meas.bounding_boxes[meas_index+1]
 					image_width = latest_relevant_meas.image_width
@@ -188,7 +194,7 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
 					min_distance = 1000000
 					min_prev_bb = []
 					got_prev = false
-					for(prev_bb,prev_state) in prev_bbs_and_states
+					for (prev_bb, prev_state) in prev_bbs_and_states
 						got_prev = true
 						diff = norm(full_meas - prev_bb)
 						if (diff < min_distance)
@@ -196,25 +202,25 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
 							min_prev_bb = prev_bb
 						end
 					end
-					if(got_prev)
+					if (got_prev)
 						bb_distances[min_distance] = full_meas
 						bb_and_prior_map[full_meas] = OtherVehicleStates(prev_bbs_and_states[min_prev_bb][1], prev_bbs_and_states[min_prev_bb][2], prev_bbs_and_states[min_prev_bb][3],
-						prev_bbs_and_states[min_prev_bb][4], prev_bbs_and_states[min_prev_bb][5], prev_bbs_and_states[min_prev_bb][6], prev_bbs_and_states[min_prev_bb][7])
+							prev_bbs_and_states[min_prev_bb][4], prev_bbs_and_states[min_prev_bb][5], prev_bbs_and_states[min_prev_bb][6], prev_bbs_and_states[min_prev_bb][7])
 						bb_and_prior_covar_map[full_meas] = prev_bbs_and_covars[min_prev_bb]
 					else
-						push!(new_bbs,full_meas)
+						push!(new_bbs, full_meas)
 					end
-					
+
 				end
 
-				sorted_bb_distances_keys = sort(collect(keys(bb_distances)), rev=true)
+				sorted_bb_distances_keys = sort(collect(keys(bb_distances)), rev = true)
 				# Removes bad box prior pairs
-				for repeat_index = 1:trunc(Int,num_meas/2-new_vehicles)-1
-					push!(new_bbs,bb_distances[sorted_bb_distances_keys[repeat_index]])
-					delete!(bb_and_prior_map,bb_distances[sorted_bb_distances_keys[repeat_index]])
+				for repeat_index ∈ 1:trunc(Int, num_meas / 2 - new_vehicles)-1
+					push!(new_bbs, bb_distances[sorted_bb_distances_keys[repeat_index]])
+					delete!(bb_and_prior_map, bb_distances[sorted_bb_distances_keys[repeat_index]])
 				end
 
-				for new_vehicle_index = 1:trunc(Int,new_vehicles)
+				for new_vehicle_index ∈ 1:trunc(Int, new_vehicles)
 					the_new_meas_for_new_vehicle = new_bbs[new_vehicle_index]
 					the_pixel_width = the_new_meas_for_new_vehicle[4] - the_new_meas_for_new_vehicle[2]
 					fake_distance = -3.7 * the_pixel_width + 47.4
@@ -224,8 +230,8 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
 					)
 					prior_p1 = latest_localization_state.position[1] + fake_distance * cos(prior_theta)#vehicle_size[1] * 1.5
 					prior_p2 = latest_localization_state.position[2] + fake_distance * sin(prior_theta)#vehicle_size[2] * 1.5
-					
-					prior_velocity = 0
+
+					prior_velocity = latest_localization_state.linear_vel[1]
 					prior_l = vehicle_size[1]
 					prior_w = vehicle_size[2]
 					prior_h = vehicle_size[3]
@@ -338,6 +344,7 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
 	@info "Terminated perception task."
 end
 
+
 function decision_making(localization_state_channel,
 	perception_state_channel,
 	target_road_segment_channel,
@@ -432,7 +439,7 @@ function test_algorithms(gt_channel,
 			end
 		end
 		latest_est_ego_state = fetch(localization_state_channel)
-		
+
 		latest_gt_ego_state = gt_vehicle_states[ego_vehicle_id]
 
 		gt_localization_state = LocalizationEstimate(latest_gt_ego_state.time, latest_gt_ego_state.position, latest_gt_ego_state.orientation, latest_gt_ego_state.velocity, latest_gt_ego_state.angular_velocity)
@@ -457,7 +464,7 @@ function test_algorithms(gt_channel,
 		latest_perception_state = fetch(perception_state_channel)
 		#@info "Perception update"
 		#@info latest_perception_state.x
-		#= last_perception_update = latest_perception_state.last_update
+		last_perception_update = latest_perception_state.last_update
 		vehicles = latest_perception_state.x
 
 		for vehicle in vehicles
@@ -488,10 +495,10 @@ function test_algorithms(gt_channel,
 				actual_size = paired_gt_vehicle.size
 				estimated_position = [vehicle.p1, vehicle.p2]
 				actual_position = paired_gt_vehicle.position[1:2]
-				@info "Estimated size error: $(norm(actual_size-estimated_size))"
-				#@info "Estimated position error: $(norm(actual_position-estimated_position))"
+				#@info "Estimated size error: $(norm(actual_size-estimated_size))"
+				@info "Estimated position error: $(norm(actual_position-estimated_position))"
 			end
-		end =#
+		end
 	end
 	@info "Terminated testing task."
 end
