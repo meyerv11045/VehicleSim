@@ -9,16 +9,12 @@ struct SimpleVehicleState
 end
 
 # for use with the ego vehicles
-struct FullVehicleState
+struct LocalizationEstimate
+    time::Float64
     position::SVector{3, Float64}
     quaternion::SVector{4, Float64}
     linear_vel::SVector{3, Float64}
     angular_vel::SVector{3, Float64}
-end
-
-struct LocalizationEstimate
-    last_update::Float64
-    x::FullVehicleState
 end
 
 struct Percept
@@ -26,27 +22,79 @@ struct Percept
     x::Vector{SimpleVehicleState}
 end
 
-function localize(gps_channel, imu_channel, localization_state_channel, shutdown_channel)
+
+function matrix_to_quaternion(R)
+    w = sqrt(1 + R[1,1] + R[2,2] + R[3,3]) / 2
+    x = (R[3,2] - R[2,3]) / (4 * w)
+    y = (R[1,3] - R[3,1]) / (4 * w)
+    z = (R[2,1] - R[1,2]) / (4 * w)
+    q = [w, x, y, z]
+    return q
+end
+
+function get_driving_dir_of_road_seg(road_segment_id, map)
+    # tested and verified with map segment 101 which should have driving dir
+    # of [-1, 0] in map frame which corresponds to θ = π
+
+    # also tested and verified with vehicle's initial position in sim with 1
+    # vehicle. θ = π/2 which corresponds to driving dir of [0, 1] in map frame
+    cur_segment = map[road_segment_id]
+
+    lane_boundary = cur_segment.lane_boundaries[1]
+    b = lane_boundary.pt_b
+    a = lane_boundary.pt_a
+    dir = (b-a) / norm(b-a)
+    θ = atan(dir[2], dir[1])
+    return θ
+end
+
+
+function localize(map, gps_channel, imu_channel, localization_state_channel, shutdown_channel)
     @info "Starting localization task..."
-    # Define the initial state and covariance p(x₀) ~ N(x₀, P₀)
-    x₀ = FullVehicleState(
-        [0.0, 0.0, 1],
-        [1.0, 0.0, 0.0, 0.0],
-        zeros(3),
-        zeros(3))
-    P₀ = Diagonal(ones(12))  # Initial covariance (uncertainty)
+
+    # Initial state and covariance p(x₀) ~ N(x₀, P₀)
+    x₀ = zeros(13)
+
+    # use first GPS measurement to get a storng prior on initial position + orientation
+    init_gps_meas = take!(gps_channel)
+
+    t = [-3.0, 1, 2.6] # gps sensor in reference to the body frame
+    xy_gps_in_map = [init_gps_meas.lat, init_gps_meas.long]
+
+    θ = init_gps_meas.heading
+
+    # rotate from map frame to estimate of body's orientation in map frame
+    R_3D = [cos(θ) -sin(θ) 0;
+            sin(θ) cos(θ) 0;
+            0 0 1]
+    q  = matrix_to_quaternion(R_3D)
+    x₀[4:7] = q   # estimate of initial orientation
+
+    R_2D = [cos(θ) -sin(θ);
+            sin(θ) cos(θ)]
+
+    # need to apply the rotation to the translation, not the point in map frame
+    xy_body_in_map = xy_gps_in_map - R_2D*t[1:2]
+
+    x₀[1:2] = xy_body_in_map
+
+    init = ones(13)
+    init[4:7] .= 0.001
+    P₀ = Diagonal(init)  # Initial covariance (uncertainty)
 
     # Process noise covariance
-    Q = Diagonal(0.01*ones(12))
+    # trust the process model a lot!!
+    Q = Diagonal(0.00001*ones(13))
 
     # Measurement noise covariance (taken from the generator functions)
-    imu_variance = Diagonal([0.01, 0.01, 0.01, 0.01, 0.01, 0.01].^2)
-    gps_variance = Diagonal([1.0, 1.0].^2)
+    imu_variance = Diagonal([0.1, 0.1, 0.1, 0.1, 0.1, 0.1].^2)
+    gps_variance = Diagonal([10.0, 10.0, 1.0].^2)
 
     # Initialize the estimate of the state
     x̂ = x₀
     P̂ = P₀
 
+    last_update = time()
     while true
         sleep(0.001) # prevent thread from hogging resources & freezing other threads
         isready(shutdown_channel) && break
@@ -63,25 +111,29 @@ function localize(gps_channel, imu_channel, localization_state_channel, shutdown
         end
 
         while length(fresh_gps_meas) > 0 || length(fresh_imu_meas) > 0
-            if length(fresh_gps_meas) == length(fresh_imu_meas)
-                z = popfirst!(fresh_gps_meas)
-            elseif length(fresh_gps_meas) > length(fresh_imu_meas)
-                z = popfirst!(fresh_gps_meas)
+            if length(fresh_gps_meas) ≥ length(fresh_imu_meas)
+                meas = popfirst!(fresh_gps_meas)
+                z = [meas.lat; meas.long; meas.heading]
+                R = gps_variance
             else
-                z = popfirst!(fresh_imu_meas)
+                meas = popfirst!(fresh_imu_meas)
+                z = [meas.linear_vel ; meas.angular_vel]
+                R = imu_variance
             end
 
-            x̂, P̂ = ekf_step(z, x̂, P̂, Q, imu_variance, gps_variance)
+            Δ = meas.time - last_update
 
-            localization_state = LocalizationEstimate(time(), FullVehicleState(x̂...))
-            @info "Localization state: $localization_state"
+            x̂, P̂ = ekf_step(z, x̂, P̂, Q, R, Δ)
+            last_update = meas.time
+
+            localization_state = LocalizationEstimate(time(), x̂[1:3], x̂[4:7], x̂[8:10], x̂[11:13])
             if isready(localization_state_channel)
                 take!(localization_state_channel)
             end
             put!(localization_state_channel, localization_state)
         end
     end
-    @info "Finished localization task."
+    @info "Terminated localization task."
 end
 
 function perception(cam_meas_channel, localization_state_channel, perception_state_channel, shutdown_channel)
@@ -202,7 +254,7 @@ function decision_making(localization_state_channel,
                         steering_angle = find_steering_angle(cur_road_segment_id, map, position_on_road[1], position_on_road[2], yaw)
                         println("Target Velocity: $target_velocity")
                     else #condition for all other roads
-                        target_velocity = 10.0 
+                        target_velocity = 10.0
                         steering_angle = find_steering_angle(cur_road_segment_id, map, position_on_road[1], position_on_road[2], yaw)
                     end
                 end
@@ -233,6 +285,13 @@ function isfull(ch::Channel)
     length(ch.data) ≥ ch.sz_max
 end
 
+function quaternion_to_euler(q)
+    yaw = atan(2*q[4]*q[3] + 2*q[1]*q[2], 1 - 2*q[2]^2 - 2*q[3]^2)
+    pitch = asin(2*q[4]*q[2] - 2*q[1]*q[3])
+    roll = atan(2*q[4]*q[1] + 2*q[2]*q[3], 1 - 2*q[1]^2 - 2*q[2]^2)
+    return (roll, pitch, yaw)
+end
+
 function test_algorithms(gt_channel,
     localization_state_channel,
     perception_state_channel,
@@ -240,9 +299,12 @@ function test_algorithms(gt_channel,
     ego_vehicle_id)
     @info "Starting testing task..."
 
-    estimated_vehicle_states = Dict{Int, Tuple{Float64, Union{SimpleVehicleState, FullVehicleState}}}()
+    # estimated_vehicle_states = Dict{Int, Tuple{Float64, Union{SimpleVehicleState, LocalizationEstimate}}}()
     gt_vehicle_states = Dict{Int, GroundTruthMeasurement}()
 
+    # only start testing after we have received the first ground truth measurement
+    wait(gt_channel)
+    first_est = true
     t = time()
     while true
         sleep(0.001) # prevent thread from hogging resources & freezing other threads
@@ -252,25 +314,57 @@ function test_algorithms(gt_channel,
             meas = take!(gt_channel)
             id = meas.vehicle_id
 
+            # add measurement to gt state dictionary if vehicle id doesn't
+            # exist or measurement is more recent than existing measurement
             if !haskey(gt_vehicle_states, id) || meas.time > gt_vehicle_states[id].time
                 gt_vehicle_states[id] = meas
             end
         end
 
-        # latest_estimated_ego_state = fetch(localization_state_channel)
-        # latest_true_ego_state = gt_vehicle_states[ego_vehicle_id]
-        # if latest_estimated_ego_state.last_update < latest_true_ego_state.time - 0.5
-        #     @warn "Localization algorithm stale."
-        # else
-        #     estimated_xyz = latest_estimated_ego_state.position
-        #     true_xyz = latest_true_ego_state.position
-        #     position_error = norm(estimated_xyz - true_xyz)
-        #     t2 = time()
-        #     if t2 - t > 5.0
-        #         @info "Localization position error: $position_error"
-        #         t = t2
-        #     end
-        # end
+        latest_est_ego_state = fetch(localization_state_channel)
+        latest_gt_ego_state = gt_vehicle_states[ego_vehicle_id]
+        if latest_est_ego_state.time < latest_gt_ego_state.time - 0.5
+            @warn "Localization algorithm stale."
+        else
+            estimated_xyz = latest_est_ego_state.position
+            true_xyz = latest_gt_ego_state.position
+
+            estimated_v = latest_est_ego_state.linear_vel
+            true_v = latest_gt_ego_state.velocity
+
+            estimated_q = latest_est_ego_state.quaternion
+            true_q = latest_gt_ego_state.orientation
+
+
+            position_error = norm(estimated_xyz[1:2] - true_xyz[1:2])
+            vel_error = norm(estimated_v[1:2] - true_v[1:2])
+
+            t2 = time()
+            if t2 - t > 2.5 || first_est
+                @info "------------------------------"
+                @info @sprintf "Localization xy position error: %.3f" position_error
+                @info @sprintf "x: %.2f | %.2f" estimated_xyz[1] true_xyz[1]
+                @info @sprintf "y: %.2f | %.2f" estimated_xyz[2] true_xyz[2]
+                # @info "z: $(estimated_xyz[3]) | $(true_xyz[3])"
+
+                @info "orientation (est vs ground truth)"
+                @info estimated_q
+                @info true_q
+                # @info @sprintf "Localization orientation error: %.3f" orientation_error
+                # @info @sprintf "roll: %.2f | %.2f" roll_e roll_t
+                # @info @sprintf "pitch: %.2f | %.2f" pitch_e pitch_t
+                # @info @sprintf "yaw: %.2f | %.2f" yaw_e yaw_t
+
+                @info @sprintf "Localization xy velocity error: %.3f" vel_error
+                @info @sprintf "v_x: %.2f | %.2f" estimated_v[1] true_v[1]
+                @info @sprintf "v_y: %.2f | %.2f" estimated_v[2] true_v[2]
+                # @info "v_z: $(estimated_v[3]) | $(true_v[3])"
+
+                # @info "estimated: $estimated_xyz | true: $true_xyz"
+                t = t2
+                first_est = false
+            end
+        end
 
         # latest_perception_state = fetch(perception_state_channel)
         # last_perception_update = latest_perception_state.last_update
@@ -351,7 +445,7 @@ function publish_socket_data_to_channels(socket, gps_channel, imu_channel, cam_c
     @info "Terminated socket data publishing task."
 end
 
-function test_client(host::IPAddr=IPv4(0), port=4444; v_step = 1.0, s_step = π/10)
+function test_client(host::IPAddr=IPv4(0), port=4444; v_step = 1.0, s_step = π/10, use_keyboard=true)
     socket = Sockets.connect(host, port)
     (peer_host, peer_port) = getpeername(socket)
     msg = deserialize(socket) # Visualization info
@@ -374,9 +468,12 @@ function test_client(host::IPAddr=IPv4(0), port=4444; v_step = 1.0, s_step = π/
     # does not raise an error though
     # so we have to press q to quit and code below will handle killing worker threads
     errormonitor(@async publish_socket_data_to_channels(socket, gps_channel, imu_channel, cam_channel, gt_channel, target_road_segment_channel, shutdown_channel))
-    # errormonitor(@async localize(gps_channel, imu_channel, localization_state_channel, shutdown_channel))
+    errormonitor(@async localize(map_segments, gps_channel, imu_channel, localization_state_channel, shutdown_channel))
     # errormonitor(@asyc perception(cam_channel, localization_state_channel, perception_state_channel, shutdown_channel))
-    errormonitor(@async decision_making(gt_channel, perception_state_channel, target_road_segment_channel, shutdown_channel, map_segments, socket))
+    if !use_keyboard
+        # use gt channel instead of localization channel for testing purposes
+        errormonitor(@async decision_making(gt_channel, perception_state_channel, target_road_segment_channel, shutdown_channel, map_segments, socket))
+    end
     errormonitor(@async test_algorithms(gt_channel, localization_state_channel, perception_state_channel, shutdown_channel, ego_vehicle_id))
 
     target_velocity = 0.0
@@ -411,7 +508,9 @@ function test_client(host::IPAddr=IPv4(0), port=4444; v_step = 1.0, s_step = π/
             steering_angle -= s_step
             @info "Target steering angle: $steering_angle"
         end
-        cmd = VehicleCommand(steering_angle, target_velocity, controlled)
-        serialize(socket, cmd)
+        if use_keyboard
+            cmd = VehicleCommand(steering_angle, target_velocity, controlled)
+            serialize(socket, cmd)
+        end
     end
 end

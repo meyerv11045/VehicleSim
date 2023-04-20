@@ -1,4 +1,4 @@
-function makeHeap(map, heap_handles, road_min_heap, dist_vals)
+function populate_heap!(map, heap_handles, road_min_heap, dist_vals)
     for road_segment in map # road_segment is a Pair: [road_id, RoadSegment]
         road_id = road_segment[1]
 
@@ -22,7 +22,7 @@ function shortest_path(start_road_ID, end_road_ID, map)
     road_min_heap = MutableBinaryMinHeap{Vector{Any}}() # each heap node is [distance value, road ID]
     parent_road = Dict{Int, Int}() # key: road ID, value: parent road
 
-    makeHeap(map, heap_handles, road_min_heap, dist_vals)
+    populate_heap!(map, heap_handles, road_min_heap, dist_vals)
     update!(road_min_heap, heap_handles[start_road_ID], [0, start_road_ID])
     dist_vals[start_road_ID] = 0
 
@@ -128,7 +128,8 @@ function cur_map_segment_of_vehicle(position, map)
             end
         end
     end
-    return 0
+    @warn "vehicle at $position is not on the road"
+    return nothing # vehicle off the road
 end
 
 """
@@ -152,8 +153,13 @@ function find_side_of_road(position, current_road_id, map)
     for boundary in road_boundaries[1:2]
         whole_road_vertices = vcat(whole_road_vertices, boundary.pt_a')
         whole_road_vertices = vcat(whole_road_vertices, boundary.pt_b')
+        whole_road_vertices = vcat(whole_road_vertices, boundary.pt_b')
     end
 
+    pt_a1 = Point{2}(whole_road_vertices[1,:])
+    pt_b1 = Point{2}(whole_road_vertices[2,:])
+    pt_a2 = Point{2}(whole_road_vertices[3,:])
+    pt_b2 = Point{2}(whole_road_vertices[4,:])
     pt_a1 = Point{2}(whole_road_vertices[1,:])
     pt_b1 = Point{2}(whole_road_vertices[2,:])
     pt_a2 = Point{2}(whole_road_vertices[3,:])
@@ -212,7 +218,7 @@ function find_side_of_road(position, current_road_id, map)
         elseif inpoly2(position, right_road_vertices, polygon_edges)[1] == 1
             return "right", dist_from_center
         else
-            return "error", 0.0      
+            return "error", 0.0
         end
     else # for curved roads
         min_x = minimum([pt_a1[1], pt_a2[1], pt_b1[1], pt_b2[1]])
@@ -258,7 +264,7 @@ Finds calculates the steering angle for the ego vehicle to stay within lane boun
 function find_steering_angle(current_road_id, map, side_of_road, dist_from_center_road, yaw)
     steering_angle = 0.0
     Kp = 0.08
-    
+
     current_road_boundaries = map[current_road_id].lane_boundaries
     midpoint_a = (current_road_boundaries[1].pt_a + current_road_boundaries[2].pt_a) / 2
     midpoint_b = (current_road_boundaries[1].pt_b + current_road_boundaries[2].pt_b) / 2
@@ -386,7 +392,7 @@ function find_side_of_load_zone(position, current_road_id, map)
     elseif inpoly2(position, right_road_vertices, polygon_edges)[1] == 1
         return "right", dist_from_center
     else
-        return "error", 0.0      
+        return "error", 0.0
     end
 end
 

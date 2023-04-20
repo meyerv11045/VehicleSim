@@ -7,7 +7,7 @@ function vehicle_simulate(state::MechanismState{X}, mviss, vehicle_id, final_tim
     result = DynamicsResult{T}(state.mechanism)
     control_torques = similar(velocity(state))
     external_wrenches = Dict{RigidBodyDynamics.BodyID, RigidBodyDynamics.Wrench{T}}()
-    closed_loop_dynamics! = let result=result, control_torques=control_torques, stabilization_gains=stabilization_gains 
+    closed_loop_dynamics! = let result=result, control_torques=control_torques, stabilization_gains=stabilization_gains
         function (v̇::AbstractArray, ṡ::AbstractArray, t, state)
             internal_control!(control_torques, t, state)
             external_control!(external_wrenches, t, state)
@@ -31,13 +31,13 @@ function load_mechanism()
     (; urdf_path, chevy_base, chevy_joints)
 end
 
-function server(max_vehicles=1, 
-        port=4444; 
-        full_state=true, 
-        rng=MersenneTwister(1), 
-        measure_gps=true, 
-        measure_imu=true, 
-        measure_cam=true, 
+function server(max_vehicles=1,
+        port=4444;
+        full_state=true,
+        rng=MersenneTwister(1),
+        measure_gps=true,
+        measure_imu=true,
+        measure_cam=true,
         measure_gt=true)
     host = getipaddr()
     map = training_map()
@@ -79,15 +79,15 @@ function server(max_vehicles=1,
 
     @async visualize_vehicles(vehicles, state_channels, shutdown_channel)
 
-    measure_vehicles(map, 
-                     vehicles, 
-                     state_channels, 
-                     meas_channels, 
-                     shutdown_channel; 
-                     rng, 
-                     measure_gps, 
-                     measure_imu, 
-                     measure_cam, 
+    measure_vehicles(map,
+                     vehicles,
+                     state_channels,
+                     meas_channels,
+                     shutdown_channel;
+                     rng,
+                     measure_gps,
+                     measure_imu,
+                     measure_cam,
                      measure_gt)
 
     client_connections = [false for _ in 1:max_vehicles]
@@ -121,25 +121,44 @@ function server(max_vehicles=1,
                 end
                 serialize(sock, inform_hostport(client_visualizers[client_count], "Client follow-cam"))
                 let vehicle_id=client_count
-                    errormonitor(@async begin
-                        while isopen(sock)
-                            sleep(0.001)
-                            car_cmd = deserialize(sock)
-                            put!(cmd_channels[vehicle_id], car_cmd)
-                            if !car_cmd.controlled
-                                close(sock)
-                           end
-                        end
-                    end)
-                    errormonitor(@async begin
-                        while isopen(sock)
-                            sleep(0.001)
-                            if isready(meas_channels[vehicle_id])       
-                                msg = take!(meas_channels[vehicle_id])
-                                serialize(sock, msg)
+                    @async begin
+                        try
+                            while isopen(sock)
+                                sleep(0.001)
+                                local car_cmd
+                                received = false
+                                while true
+                                    @async eof(sock)
+                                    if bytesavailable(sock) > 0
+                                        car_cmd = deserialize(sock)
+                                        received = true
+                                    else
+                                        break
+                                    end
+                                end
+                                !received && continue
+                                put!(cmd_channels[vehicle_id], car_cmd)
+                                if !car_cmd.controlled
+                                    close(sock)
+                               end
                             end
+                        catch e
+                            @warn "Error receiving command for vehicle $vehicle_id. Did client fail?"
                         end
-                    end)
+                    end
+                    @async begin
+                        try
+                            while isopen(sock)
+                                sleep(0.001)
+                                if isready(meas_channels[vehicle_id])
+                                    msg = take!(meas_channels[vehicle_id])
+                                    serialize(sock, msg)
+                                end
+                            end
+                        catch e
+                            @warn "Error sending measurements to vehicle $vehicle_id. Did client fail?"
+                        end
+                    end
                 end
             catch e
                 break
@@ -162,7 +181,7 @@ function reset_vehicle!(vehicle, seg)
     config = get_initialization_point(seg)
     foreach(mvis->configure_car!(mvis, state, joints(chevy), config), mviss)
 end
-    
+
 function spawn_car_on_map(visualizers, seg, chevy_base, chevy_visuals, chevy_joints, vehicle_id)
     chevy = deepcopy(chevy_base)
     chevy.graph.vertices[2].name="chevy_$vehicle_id"
@@ -223,16 +242,17 @@ function sim_car(cmd_channel, state_channel, shutdown_channel, vehicle, vehicle_
         end
     end
 
-    try 
-        vehicle_simulate(state, 
+    try
+        vehicle_simulate(state,
                          mviss,
                          vehicle_id,
-                         Inf, 
-                         control!, 
+                         Inf,
+                         control!,
                          wrenches!,
                          publisher!;
                          max_realtime_rate=1.0)
     catch e
+        @warn "Terminating simulation for vehicle $vehicle_id."
         foreach(mvis->delete_vehicle!(mvis), mviss)
     end
 end
