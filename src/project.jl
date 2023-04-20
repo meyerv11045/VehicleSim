@@ -134,6 +134,7 @@ while true
     @info "Current road segment: $cur_road_segment_id"
     position_on_road = find_side_of_road(position, cur_road_segment_id, map)
     route = shortest_path(cur_road_segment_id, target_road_segment_id, map)
+    stop_signs = find_stop_sign_location_from_route(route, map) # Stop_sign ids
 
     @info "Route from $cur_road_segment_id to $target_road_segment_id calculated."
     @info "Following the calculated route $route"
@@ -177,6 +178,33 @@ while true
         println()
         # TODO: motion planning to follow the route
         # cmd = follow_route(route, cur_road_segment_id, map)
+        if (map[curr_road_segment_id].lane_types == VehicleSim.stop_sign) || (map[curr_road_segment_id].lane_types == VehicleSim.intersection)
+            if (map[curr_road_segment_id].lane_boundaries[1].pt_a[2] == map[curr_road_segment_id].lane_boundaries[1].pt_b[2]) && (map[curr_road_segment_id].lane_boundaries[2].pt_a[2]) == (map[curr_road_segment_id].lane_boundaries[2].pt_b[2]) # Horizontal Lane Case
+                mid_p = (map[curr_road_segment_id].lane_boundaries[1].pt_b + map[curr_road_segment_id].lane_boundaries[2].pt_b) / 2
+                dist = sqrt((mid_p[1] - position[1])^2 + (mid_p[2] - position[2])^2)
+                if (dist > 10.0)
+                    target_velocity = 10.0
+                elseif (10.0 < dist < 5.0)
+                    target_velocity = 3.0
+                elseif (5.0 < dist < 2.0)
+                    target_velocity = 1.0
+                elseif (dist < 1.0)
+                    target_velocity = 0.0
+                end
+            elseif (map[curr_road_segment_id].lane_boundaries[1].pt_a[1] == map[curr_road_segment_id].lane_boundaries[1].pt_b[1]) && (map[cur_road_segment_id].lane_boundaries[2].pt_b[1] == map[cur_road_segment_id].lane_boundaries[2].pt_b[1]) # Vertical Lane Case
+                mid_p = (map[curr_road_segment_id].lane_boundaries[1].pt_b + map[curr_road_segment_id].lane_boundaries[2].pt_b) / 2
+                dist = sqrt((mid_p[1] - position[1])^2 + (mid_p[2] - position[2])^2)
+                if (dist > 10.0)
+                    target_velocity = 10.0
+                elseif (10.0 < dist < 5.0)
+                    target_velocity = 3.0
+                elseif (5.0 < dist < 2.0)
+                    target_velocity = 1.0
+                elseif (dist < 1.0)
+                    target_velocity = 0.0
+                end
+            end
+        end
         cmd = VehicleCommand(steering_angle, target_velocity, controlled)
         serialize(socket, cmd)
     end
