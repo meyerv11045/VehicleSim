@@ -116,174 +116,135 @@ function decision_making(localization_state_channel,
     shutdown_channel,
     map,
     socket)
-<<<<<<< HEAD
-@info "Starting decision making task..."
-while true
-    sleep(0.001) # prevent thread from hogging resources & freezing other threads
-    isready(shutdown_channel) && break
+    @info "Starting decision making task..."
+    while true
+        sleep(0.001) # prevent thread from hogging resources & freezing other threads
+        isready(shutdown_channel) && break
 
-    target_road_segment_id = take!(target_road_segment_channel)
-    @info "Target road segment: $target_road_segment_id"
+        target_road_segment_id = take!(target_road_segment_channel)
+        @info "Target road segment: $target_road_segment_id"
 
-    localization_state = fetch(localization_state_channel)
-    position = localization_state.position[1:2] # ground truth for testing
-    # position = localization_state.x.position[1:2] # localization estimate
-    yaw = extract_yaw_from_quaternion(localization_state.orientation)
-    position = [position[1] + 7*cos(yaw), position[2] + 7*sin(yaw)]
+        localization_state = fetch(localization_state_channel)
+        position = localization_state.position[1:2] # ground truth for testing
+        # position = localization_state.x.position[1:2] # localization estimate
+        yaw = extract_yaw_from_quaternion(localization_state.orientation)
+        position = [position[1] + 7*cos(yaw), position[2] + 7*sin(yaw)]
 
-    cur_road_segment_id = cur_map_segment_of_vehicle(position, map)
-    @info "Current road segment: $cur_road_segment_id"
-    position_on_road = find_side_of_road(position, cur_road_segment_id, map)
-    route = shortest_path(cur_road_segment_id, target_road_segment_id, map)
-    stop_signs = find_stop_sign_location_from_route(route, map) # Stop_sign ids
+        cur_road_segment_id = cur_map_segment_of_vehicle(position, map)
+        @info "Current road segment: $cur_road_segment_id"
+        position_on_road = find_side_of_road(position, cur_road_segment_id, map)
+        route = shortest_path(cur_road_segment_id, target_road_segment_id, map)
 
-    @info "Route from $cur_road_segment_id to $target_road_segment_id calculated."
-    @info "Following the calculated route $route"
-=======
-    try
-        targets = [79, 94] #test target road segments manually
-        @info "Starting decision making task..."
-        while true
-            sleep(0.001) # prevent thread from hogging resources & freezing other threads
-            isready(shutdown_channel) && break
->>>>>>> b42c698c290cbb446a606baecd43c566fd2ea00f
+        @info "Route from $cur_road_segment_id to $target_road_segment_id calculated."
+        @info "Following the calculated route $route"
 
-            target_road_segment_id = popfirst!(targets)#take!(target_road_segment_channel)
-            @info "Target road segment: $target_road_segment_id"
 
+        cur_road_segment_id = popfirst!(route)
+
+        steering_angle = 0.0
+        target_velocity = 0.0
+        controlled = true
+
+        while !isempty(route)
+            # slower checking since we aren't changing road segments that often
+            sleep(0.1) # prevent thread from hogging resources & freezing other threads
+
+            println("Current road seg id: $cur_road_segment_id")
             localization_state = fetch(localization_state_channel)
             position = localization_state.position[1:2] # ground truth for testing
-            # position = localization_state.x.position[1:2] # localization estimate
             yaw = extract_yaw_from_quaternion(localization_state.orientation)
+            println("Yaw: $yaw")
+
             position = [position[1] + 7*cos(yaw), position[2] + 7*sin(yaw)]
+            println("Position: $position")
+            # position = localization_state.x.position[1:2] # localization estimate
+            if position_on_road[1] == "error"
+                cur_road_segment_id = popfirst!(route)
+            end
 
-            cur_road_segment_id = cur_map_segment_of_vehicle(position, map)
-            start_road_id = cur_road_segment_id
-            @info "Current road segment: $cur_road_segment_id"
-            position_on_road = find_side_of_road(position, cur_road_segment_id, map)
-            route = shortest_path(cur_road_segment_id, target_road_segment_id, map)
-
-            @info "Route from $cur_road_segment_id to $target_road_segment_id calculated."
-            @info "Following the calculated route $route"
-
-            cur_road_segment_id = popfirst!(route)
-
-            steering_angle = 0.0
-            target_velocity = 0.0
-            controlled = true
-
-            while !isempty(route)
-                # slower checking since we aren't changing road segments that often
-                sleep(0.1) # prevent thread from hogging resources & freezing other threads
-
-                println("Current road seg id: $cur_road_segment_id")
-                localization_state = fetch(localization_state_channel)
-                position = localization_state.position[1:2] # ground truth for testing
-                yaw = extract_yaw_from_quaternion(localization_state.orientation)
-                println("Yaw: $yaw")
-
-                position = [position[1] + 7*cos(yaw), position[2] + 7*sin(yaw)]
-                println("Position: $position")
-                # position = localization_state.x.position[1:2] # localization estimate
-                if position_on_road[1] == "error"
-                    cur_road_segment_id = popfirst!(route)
-                end
-
-                if cur_road_segment_id == target_road_segment_id && map[cur_road_segment_id].lane_types[2] == VehicleSim.loading_zone #handles unloading zone
+            if cur_road_segment_id == target_road_segment_id && map[cur_road_segment_id].lane_types[2] == VehicleSim.loading_zone #handles unloading zone
+                position_on_road = find_side_of_load_zone(position, cur_road_segment_id, map)
+                back_car_position_on_road = position_on_road
+                while back_car_position_on_road[1] != "middle"
+                    localization_state = fetch(localization_state_channel)
+                    position = localization_state.position[1:2]
+                    yaw = extract_yaw_from_quaternion(localization_state.orientation)
+                    back_position = [position[1] + 4.25*cos(yaw), position[2] + 4.25*sin(yaw)]
+                    back_car_position_on_road = find_side_of_load_zone(back_position, cur_road_segment_id, map)
+                    position = [position[1] + 7*cos(yaw), position[2] + 7*sin(yaw)]
                     position_on_road = find_side_of_load_zone(position, cur_road_segment_id, map)
-                    back_car_position_on_road = position_on_road
-                    while back_car_position_on_road[1] != "middle"
-                        localization_state = fetch(localization_state_channel)
-                        position = localization_state.position[1:2]
-                        yaw = extract_yaw_from_quaternion(localization_state.orientation)
-                        back_position = [position[1] + 4.25*cos(yaw), position[2] + 4.25*sin(yaw)]
-                        back_car_position_on_road = find_side_of_load_zone(back_position, cur_road_segment_id, map)
-                        position = [position[1] + 7*cos(yaw), position[2] + 7*sin(yaw)]
-                        position_on_road = find_side_of_load_zone(position, cur_road_segment_id, map)
-                        println("Current road seg id: $cur_road_segment_id")
-                        println("Yaw: $yaw")
-                        println("Position: $position")
-                        println("Center Position: $back_car_position_on_road")
-                        println("Side of road: $position_on_road")
-                        target_velocity = 3.0
-                        steering_angle = find_steering_angle_normal(cur_road_segment_id, map, position_on_road[1], position_on_road[2], yaw)
-                        println("Steering Angle: $steering_angle")
-                        cmd = VehicleCommand(steering_angle, target_velocity, controlled)
-                        serialize(socket, cmd)
-                    end
-                    target_velocity = 0.0
+                    println("Current road seg id: $cur_road_segment_id")
+                    println("Yaw: $yaw")
+                    println("Position: $position")
+                    println("Center Position: $back_car_position_on_road")
+                    println("Side of road: $position_on_road")
+                    target_velocity = 3.0
+                    steering_angle = find_steering_angle_normal(cur_road_segment_id, map, position_on_road[1], position_on_road[2], yaw)
+                    println("Steering Angle: $steering_angle")
                     cmd = VehicleCommand(steering_angle, target_velocity, controlled)
                     serialize(socket, cmd)
-                else
-                    position_on_road = find_side_of_road(position, cur_road_segment_id, map)
-                    if map[cur_road_segment_id].lane_boundaries[1].curvature != 0 #condition for curved roads
-                        target_velocity = 5.0
-                        steering_angle = find_steering_angle_normal(cur_road_segment_id, map, position_on_road[1], position_on_road[2], yaw)
-                    elseif cur_road_segment_id == start_road_id #condition for start road
-                        target_velocity = 3.5
-                        steering_angle = find_steering_angle_normal(cur_road_segment_id, map, position_on_road[1], position_on_road[2], yaw)
-                    else #condition for all other roads
-                        target_velocity = 10.0 
-                        steering_angle = find_steering_angle_normal(cur_road_segment_id, map, position_on_road[1], position_on_road[2], yaw)
-                    end
                 end
-                println("Side of road: $position_on_road")
-                println("Steering Angle: $steering_angle")
-                println()
-
+                target_velocity = 0.0
                 cmd = VehicleCommand(steering_angle, target_velocity, controlled)
                 serialize(socket, cmd)
-            end
-            if (cur_road_segment_id == target_road_segment_id) #FIX ME: This will always return true since we pop the whole stack of road segments in the route plan
-                @info "Reached target: $target_road_segment_id."
-                steering_angle = 0.0
-                target_velocity = 0.0
             else
-                @info "Target not reached!"
+                position_on_road = find_side_of_road(position, cur_road_segment_id, map)
+                if map[cur_road_segment_id].lane_boundaries[1].curvature != 0 #condition for curved roads
+                    target_velocity = 5.0
+                    steering_angle = find_steering_angle_normal(cur_road_segment_id, map, position_on_road[1], position_on_road[2], yaw)
+                elseif cur_road_segment_id == start_road_id #condition for start road
+                    target_velocity = 3.5
+                    steering_angle = find_steering_angle_normal(cur_road_segment_id, map, position_on_road[1], position_on_road[2], yaw)
+                else #condition for all other roads
+                    target_velocity = 10.0 
+                    steering_angle = find_steering_angle_normal(cur_road_segment_id, map, position_on_road[1], position_on_road[2], yaw)
+                end
+                if (map[curr_road_segment_id].lane_types == VehicleSim.stop_sign) || (map[curr_road_segment_id].lane_types == VehicleSim.intersection)
+                    if (map[curr_road_segment_id].lane_boundaries[1].pt_a[2] == map[curr_road_segment_id].lane_boundaries[1].pt_b[2]) && (map[curr_road_segment_id].lane_boundaries[2].pt_a[2]) == (map[curr_road_segment_id].lane_boundaries[2].pt_b[2]) # Horizontal Lane Case
+                        mid_p = (map[curr_road_segment_id].lane_boundaries[1].pt_b + map[curr_road_segment_id].lane_boundaries[2].pt_b) / 2
+                        dist = sqrt((mid_p[1] - position[1])^2 + (mid_p[2] - position[2])^2)
+                        if (dist > 10.0)
+                            target_velocity = 10.0
+                        elseif (10.0 < dist < 5.0)
+                            target_velocity = 3.0
+                        elseif (5.0 < dist < 2.0)
+                            target_velocity = 1.0
+                        elseif (dist < 1.0)
+                            target_velocity = 0.0
+                        end
+                    elseif (map[curr_road_segment_id].lane_boundaries[1].pt_a[1] == map[curr_road_segment_id].lane_boundaries[1].pt_b[1]) && (map[cur_road_segment_id].lane_boundaries[2].pt_b[1] == map[cur_road_segment_id].lane_boundaries[2].pt_b[1]) # Vertical Lane Case
+                        mid_p = (map[curr_road_segment_id].lane_boundaries[1].pt_b + map[curr_road_segment_id].lane_boundaries[2].pt_b) / 2
+                        dist = sqrt((mid_p[1] - position[1])^2 + (mid_p[2] - position[2])^2)
+                        if (dist > 10.0)
+                            target_velocity = 10.0
+                        elseif (10.0 < dist < 5.0)
+                            target_velocity = 3.0
+                        elseif (5.0 < dist < 2.0)
+                            target_velocity = 1.0
+                        elseif (dist < 1.0)
+                            target_velocity = 0.0
+                        end
+                    end
+                end
             end
+            println("Side of road: $position_on_road")
+            println("Steering Angle: $steering_angle")
+            println()
+
             cmd = VehicleCommand(steering_angle, target_velocity, controlled)
             serialize(socket, cmd)
         end
-<<<<<<< HEAD
-        println("Steering Angle: $steering_angle")
-        println()
-        # TODO: motion planning to follow the route
-        # cmd = follow_route(route, cur_road_segment_id, map)
-        if (map[curr_road_segment_id].lane_types == VehicleSim.stop_sign) || (map[curr_road_segment_id].lane_types == VehicleSim.intersection)
-            if (map[curr_road_segment_id].lane_boundaries[1].pt_a[2] == map[curr_road_segment_id].lane_boundaries[1].pt_b[2]) && (map[curr_road_segment_id].lane_boundaries[2].pt_a[2]) == (map[curr_road_segment_id].lane_boundaries[2].pt_b[2]) # Horizontal Lane Case
-                mid_p = (map[curr_road_segment_id].lane_boundaries[1].pt_b + map[curr_road_segment_id].lane_boundaries[2].pt_b) / 2
-                dist = sqrt((mid_p[1] - position[1])^2 + (mid_p[2] - position[2])^2)
-                if (dist > 10.0)
-                    target_velocity = 10.0
-                elseif (10.0 < dist < 5.0)
-                    target_velocity = 3.0
-                elseif (5.0 < dist < 2.0)
-                    target_velocity = 1.0
-                elseif (dist < 1.0)
-                    target_velocity = 0.0
-                end
-            elseif (map[curr_road_segment_id].lane_boundaries[1].pt_a[1] == map[curr_road_segment_id].lane_boundaries[1].pt_b[1]) && (map[cur_road_segment_id].lane_boundaries[2].pt_b[1] == map[cur_road_segment_id].lane_boundaries[2].pt_b[1]) # Vertical Lane Case
-                mid_p = (map[curr_road_segment_id].lane_boundaries[1].pt_b + map[curr_road_segment_id].lane_boundaries[2].pt_b) / 2
-                dist = sqrt((mid_p[1] - position[1])^2 + (mid_p[2] - position[2])^2)
-                if (dist > 10.0)
-                    target_velocity = 10.0
-                elseif (10.0 < dist < 5.0)
-                    target_velocity = 3.0
-                elseif (5.0 < dist < 2.0)
-                    target_velocity = 1.0
-                elseif (dist < 1.0)
-                    target_velocity = 0.0
-                end
-            end
+        if (cur_road_segment_id == target_road_segment_id) #FIX ME: This will always return true since we pop the whole stack of road segments in the route plan
+            @info "Reached target: $target_road_segment_id."
+            steering_angle = 0.0
+            target_velocity = 0.0
+        else
+            @info "Target not reached!"
         end
         cmd = VehicleCommand(steering_angle, target_velocity, controlled)
         serialize(socket, cmd)
-=======
-        @info "Terminated decision making task."
-    catch e
-        @info "Decision making task shutdown"
->>>>>>> b42c698c290cbb446a606baecd43c566fd2ea00f
     end
+    @info "Terminated decision making task."     
 end
 
 function isfull(ch::Channel)

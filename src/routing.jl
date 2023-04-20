@@ -170,10 +170,6 @@ function find_side_of_road(position, current_road_id, map)
     end
 
     if road_boundaries[1].curvature == 0 # for straight roads
-<<<<<<< HEAD
-        if inpoly2(position, right_road_vertices, polygon_edges)[2] == 1 && inpoly2(position, left_road_vertices, polygon_edges)[2] == 1
-            return "middle"
-=======
         dist_from_center = 0.0
         if (midpoint_a[1] == midpoint_b[1])
             dist_from_center = abs(p1 - midpoint_a[1])
@@ -183,17 +179,12 @@ function find_side_of_road(position, current_road_id, map)
 
         if inpoly2(position, middle_road_verties, polygon_edges)[1] == 1
             return "middle", dist_from_center
->>>>>>> b42c698c290cbb446a606baecd43c566fd2ea00f
         elseif inpoly2(position, left_road_vertices, polygon_edges)[1] == 1
             return "left", dist_from_center
         elseif inpoly2(position, right_road_vertices, polygon_edges)[1] == 1
             return "right", dist_from_center
         else
-<<<<<<< HEAD
-            return "error"
-=======
             return "error", 0.0      
->>>>>>> b42c698c290cbb446a606baecd43c566fd2ea00f
         end
     else # for curved roads
         min_radius = minimum([abs(1 / road_boundaries[1].curvature), abs(1 / road_boundaries[2].curvature)])
@@ -210,19 +201,11 @@ function find_side_of_road(position, current_road_id, map)
 
         dist_from_center = norm(position - center_point)
 
-<<<<<<< HEAD
-        if abs(dist_from_center - mid_radius) < 0.00001
-            return "middle"
-        elseif (dist_from_center > min_radius) && (dist_from_center < max_radius)
-            if ((dist_from_center > mid_radius) && (abs(1 / road_boundaries[1].curvature) > abs(1 / road_boundaries[2].curvature))) || (((dist_from_center < mid_radius) && (abs(1 / road_boundaries[1].curvature) < abs(1 / road_boundaries[2].curvature))))
-                return "left"
-=======
         if (p1 < max_x) && (p1 > min_x) && (p2 < max_y) && (p2 > min_y) && (dist_from_center > min_radius) && (dist_from_center < max_radius)
             if abs(dist_from_center - mid_radius) < 0.0001
                 return "middle", abs(dist_from_center - mid_radius)
             elseif ((dist_from_center > mid_radius) && (abs(1 / road_boundaries[1].curvature) > abs(1 / road_boundaries[2].curvature))) || (((dist_from_center < mid_radius) && (abs(1 / road_boundaries[1].curvature) < abs(1 / road_boundaries[2].curvature))))
                 return "left", abs(dist_from_center - mid_radius)
->>>>>>> b42c698c290cbb446a606baecd43c566fd2ea00f
             elseif ((dist_from_center > mid_radius) && (abs(1 / road_boundaries[1].curvature) < abs(1 / road_boundaries[2].curvature))) || (((dist_from_center < mid_radius) && (abs(1 / road_boundaries[1].curvature) > abs(1 / road_boundaries[2].curvature))))
                 return "right", abs(dist_from_center - mid_radius)
             end
@@ -288,45 +271,6 @@ function find_steering_angle_normal(current_road_id, map, side_of_road, dist_fro
     end
 end
 
-<<<<<<< HEAD
-function find_stop_sign_location_from_route(route, map)
-    """
-    ...
-    Arguments
-    - 'route::Vect': shortest route of road segments from the
-                     current road segment to the target road segment.
-    Returns
-    - 'stop::Vect': Roadsegment id corresponding to 
-                    lanetype stopsign. 
-    ...
-    """
-    stop = Vect{Int}()
-    for id in route  
-        if map[id].lane_types == VehicleSim.stop_sign
-            push(stop, id)
-        end
-    end
-    return stop
-end
-
-function check_current_position_to_stop_sign(curr_road_segment_id, stop_sign_id)
-    """
-    ...
-    Arguments
-    - 'curr_road_segment_id::Int : the map segment id the vehicle is estimated to be in
-    - 'stop_sign_id::Vect{Int}(): Roadsegment id corresponding to lanetype stopsign. 
-    Returns 
-    - stop: boolean: to check if current position of the car is at the stop sign.
-    ...
-    """
-    stop = false
-    for stopid ∈ stop_sign_id
-        if curr_road_segment_id == stopid
-            stop = true
-        end
-    end
-    return stop
-=======
 function find_side_of_load_zone(position, current_road_id, map)
     p1, p2 = position
 
@@ -398,5 +342,4 @@ function find_side_of_load_zone(position, current_road_id, map)
     else
         return "error", 0.0      
     end
->>>>>>> b42c698c290cbb446a606baecd43c566fd2ea00f
 end
