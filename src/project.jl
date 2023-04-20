@@ -117,13 +117,13 @@ function decision_making(localization_state_channel,
     map,
     socket)
     try
-        targets = [79, 94] #test target road segments manually
+        # targets = [79, 94] #test target road segments manually
         @info "Starting decision making task..."
         while true
             sleep(0.001) # prevent thread from hogging resources & freezing other threads
             isready(shutdown_channel) && break
 
-            target_road_segment_id = popfirst!(targets)#take!(target_road_segment_channel)
+            target_road_segment_id = take!(target_road_segment_channel) #popfirst!(targets)
             @info "Target road segment: $target_road_segment_id"
 
             localization_state = fetch(localization_state_channel)

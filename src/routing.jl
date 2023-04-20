@@ -66,7 +66,7 @@ function shortest_path(start_road_ID, end_road_ID, map)
 end
 
 """
-Finds the map segment id the vehicle is estimated to be in
+Finds the map segment id the ego vehicle is estimated to be in
     positon: [p1, p2] vector of any vehicle's position
     map: map of the environment
 """
@@ -131,6 +131,12 @@ function cur_map_segment_of_vehicle(position, map)
     return 0
 end
 
+"""
+Finds the side of a certain road segment the ego vehicle is estimated to be in
+    positon: [p1, p2] vector of any vehicle's position
+    current_road_id: road id vehicle is on
+    map: map of the environment
+"""
 function find_side_of_road(position, current_road_id, map)
     p1, p2 = position
 
@@ -241,6 +247,14 @@ function find_side_of_road(position, current_road_id, map)
     end
 end
 
+"""
+Finds calculates the steering angle for the ego vehicle to stay within lane boundaries
+    current_road_id: road id vehicle is on
+    map: map of the environment
+    side_of_road: the side of current_road_id that the ego vehicle is on
+    dist_from_center_road: distance of ego vehicle from center line of current_road_id
+    yaw: orientation of ego vehicle
+"""
 function find_steering_angle(current_road_id, map, side_of_road, dist_from_center_road, yaw)
     steering_angle = 0.0
     Kp = 0.08
@@ -264,7 +278,7 @@ function find_steering_angle(current_road_id, map, side_of_road, dist_from_cente
         end
     end
     # to implement derivative portion of PD controller, take the dot product of the normal vector of middle of road segment and velocity vector
-    if (map[current_road_id].lane_boundaries[1].curvature == 0)
+    if (map[current_road_id].lane_boundaries[1].curvature == 0) #for straight roads
         if side_of_road == "left"
             return steering_angle = -Kp * dist_from_center_road #+ -Kd * abs(road_unit_norm_vector ⋅ normalize(velocity[1:2]))
         elseif side_of_road == "right"
@@ -286,7 +300,7 @@ function find_steering_angle(current_road_id, map, side_of_road, dist_from_cente
         else
             return steering_angle = 0.0
         end
-    else
+    else # for curved roads
         if side_of_road == "left"
             return steering_angle = -Kp * dist_from_center_road + -20 * pi / 180
         elseif side_of_road == "right"
@@ -297,6 +311,12 @@ function find_steering_angle(current_road_id, map, side_of_road, dist_from_cente
     end
 end
 
+"""
+Finds the side of a loading zone road the ego vehicle is estimated to be on
+    positon: [p1, p2] vector of any vehicle's position
+    current_road_id: road id vehicle is on
+    map: map of the environment
+"""
 function find_side_of_load_zone(position, current_road_id, map)
     p1, p2 = position
 
@@ -370,6 +390,13 @@ function find_side_of_load_zone(position, current_road_id, map)
     end
 end
 
+"""
+Veloicty control for roads with stop signs
+    positon: [p1, p2] vector of any vehicle's position
+    max_velocity: maximum velocity ego vehicle is allowed to achieve
+    current_road_id: road id vehicle is on
+    map: map of the environment
+"""
 function get_stop_target_velocity(position, max_velocity, current_road_id, map)
     start_to_slow_distance = 20.0
     distance_to_stop = 0.0
@@ -378,9 +405,9 @@ function get_stop_target_velocity(position, max_velocity, current_road_id, map)
     if cur_road_seg.lane_boundaries[1].pt_a[1] == cur_road_seg.lane_boundaries[1].pt_b[1] #vertical road condition
         road_length = abs(cur_road_seg.lane_boundaries[1].pt_a[2] - cur_road_seg.lane_boundaries[1].pt_b[2])
         distance_to_stop = abs(position[2] - cur_road_seg.lane_boundaries[1].pt_b[2])
-        if distance_to_stop < start_to_slow_distance && distance_to_stop > 0.5
+        if distance_to_stop < start_to_slow_distance && distance_to_stop > 0.5 #slow down to stop
             return max_velocity * distance_to_stop / start_to_slow_distance
-        elseif distance_to_stop < 0.5
+        elseif distance_to_stop < 0.5 #start to go again
             return 5.0
         else
             return max_velocity
@@ -388,9 +415,9 @@ function get_stop_target_velocity(position, max_velocity, current_road_id, map)
     elseif cur_road_seg.lane_boundaries[1].pt_a[2] == cur_road_seg.lane_boundaries[1].pt_b[2] #horizontal road condition
         road_length = abs(cur_road_seg.lane_boundaries[1].pt_a[1] - cur_road_seg.lane_boundaries[1].pt_b[1])
         distance_to_stop = abs(position[1] - cur_road_seg.lane_boundaries[1].pt_b[1])
-        if distance_to_stop < start_to_slow_distance && distance_to_stop > 0.5
+        if distance_to_stop < start_to_slow_distance && distance_to_stop > 0.5 #slow down to stop
             return max_velocity * distance_to_stop / start_to_slow_distance
-        elseif distance_to_stop < 0.5
+        elseif distance_to_stop < 0.5 #start to go again
             return 5.0
         else
             return max_velocity
