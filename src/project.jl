@@ -466,8 +466,9 @@ function test_algorithms(gt_channel,
 		#@info latest_perception_state.x
 		last_perception_update = latest_perception_state.last_update
 		vehicles = latest_perception_state.x
-
+		thing = 0
 		for vehicle in vehicles
+			thing = thing + 1
 			xy_position = [vehicle.p1, vehicle.p2]
 			closest_id = 0
 			closest_dist = Inf
@@ -496,7 +497,7 @@ function test_algorithms(gt_channel,
 				estimated_position = [vehicle.p1, vehicle.p2]
 				actual_position = paired_gt_vehicle.position[1:2]
 				#@info "Estimated size error: $(norm(actual_size-estimated_size))"
-				@info "Estimated position error: $(norm(actual_position-estimated_position))"
+				@info "Estimated position error " thing ": " $(norm(actual_position-estimated_position))"
 			end
 		end
 	end
