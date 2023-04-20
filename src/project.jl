@@ -32,67 +32,127 @@ struct Percept
 	x::Vector{OtherVehicleStates}
 end
 
-function localize(gps_channel, imu_channel, localization_state_channel, shutdown_channel)
-	@info "Starting localization task..."
 
-	# TODO: Tune values to improve performance
-	# especially the velocity and angular velocity in the process covariance
-	# since our dynamics model does not take into account controls
+function matrix_to_quaternion(R)
+    w = sqrt(1 + R[1,1] + R[2,2] + R[3,3]) / 2
+    x = (R[3,2] - R[2,3]) / (4 * w)
+    y = (R[1,3] - R[3,1]) / (4 * w)
+    z = (R[2,1] - R[1,2]) / (4 * w)
+    q = [w, x, y, z]
+    return q
+end
 
-	# Initial state and covariance p(x₀) ~ N(x₀, P₀)
-	x₀ = zeros(13)
-	x₀[1:3] = [-91, -6, 2.6]
-	x₀[7] = 1 # quaternion corresponding to no rotation
+function get_driving_dir_of_road_seg(road_segment_id, map)
+    # tested and verified with map segment 101 which should have driving dir
+    # of [-1, 0] in map frame which corresponds to θ = π
 
-	P₀ = Diagonal(ones(13))  # Initial covariance (uncertainty)
+    # also tested and verified with vehicle's initial position in sim with 1
+    # vehicle. θ = π/2 which corresponds to driving dir of [0, 1] in map frame
+    cur_segment = map[road_segment_id]
 
-	# Process noise covariance
-	Q = Diagonal(0.01 * ones(13))
+    lane_boundary = cur_segment.lane_boundaries[1]
+    b = lane_boundary.pt_b
+    a = lane_boundary.pt_a
+    dir = (b-a) / norm(b-a)
+    θ = atan(dir[2], dir[1])
+    return θ
+end
 
-	# Measurement noise covariance (taken from the generator functions)
-	imu_variance = Diagonal([0.01, 0.01, 0.01, 0.01, 0.01, 0.01] .^ 2)
-	gps_variance = Diagonal([1.0, 1.0] .^ 2)
 
-	# Initialize the estimate of the state
-	x̂ = x₀
-	P̂ = P₀
+function localize(map, gps_channel, imu_channel, localization_state_channel, shutdown_channel)
+    @info "Starting localization task..."
 
-	while true
-		sleep(0.001) # prevent thread from hogging resources & freezing other threads
-		isready(shutdown_channel) && break
+    # Initial state and covariance p(x₀) ~ N(x₀, P₀)
+    x₀ = zeros(13)
 
-		fresh_gps_meas = []
-		while isready(gps_channel)
-			meas = take!(gps_channel)
-			push!(fresh_gps_meas, meas)
-		end
-		fresh_imu_meas = []
-		while isready(imu_channel)
-			meas = take!(imu_channel)
-			push!(fresh_imu_meas, meas)
-		end
+    # use first GPS measurement to get a storng prior on initial position + orientation
+    init_gps_meas = take!(gps_channel)
 
-		while length(fresh_gps_meas) > 0 || length(fresh_imu_meas) > 0
-			if length(fresh_gps_meas) ≥ length(fresh_imu_meas)
-				meas = popfirst!(fresh_gps_meas)
-				z = [meas.lat; meas.long]
-				R = gps_variance
-			else
-				meas = popfirst!(fresh_imu_meas)
-				z = [meas.linear_vel; meas.angular_vel]
-				R = imu_variance
-			end
+    t = [-3.0, 1, 2.6] # gps sensor in reference to the body frame
+    xy_gps_in_map = [init_gps_meas.lat, init_gps_meas.long]
 
-			x̂, P̂ = ekf_step(z, x̂, P̂, Q, R)
+    road_id = cur_map_segment_of_vehicle(xy_gps_in_map, map)
+    θ = get_driving_dir_of_road_seg(road_id, map)
 
-			localization_state = LocalizationEstimate(time(), x̂[1:3], x̂[4:7], x̂[8:10], x̂[11:13])
-			if isready(localization_state_channel)
-				take!(localization_state_channel)
-			end
-			put!(localization_state_channel, localization_state)
-		end
-	end
-	@info "Terminated localization task."
+    # rotate from map frame to estimate of body's orientation in map frame
+    R_3D = [cos(θ) -sin(θ) 0;
+            sin(θ) cos(θ) 0;
+            0 0 1]
+    q  = matrix_to_quaternion(R_3D)
+    x₀[4:7] = q   # estimate of initial orientation
+
+    R_2D = [cos(θ) -sin(θ);
+            sin(θ) cos(θ)]
+
+    # need to apply the rotation to the translation, not the point in map frame
+    xy_body_in_map = xy_gps_in_map - R_2D*t[1:2]
+
+    x₀[1:2] = xy_body_in_map
+
+    # for testing, if we want to init with correct gt pose
+    # init_pose = fetch(gt_channel) # throw away the first measurement
+    # init_gps = fetch(gps_channel)
+    # x₀[1:3] = init_pose.position
+    # x₀[4:7] = init_pose.orientation
+    # x₀[8:10] = init_pose.velocity
+    # x₀[11:13] = init_pose.angular_velocity
+
+    init = ones(13)
+    init[4:7] .= 0.001
+    P₀ = Diagonal(init)  # Initial covariance (uncertainty)
+
+    # Process noise covariance
+    # trust the process model a lot!!
+    Q = Diagonal(0.00001*ones(13))
+
+    # Measurement noise covariance (taken from the generator functions)
+    imu_variance = Diagonal([0.1, 0.1, 0.1, 0.1, 0.1, 0.1].^2)
+    gps_variance = Diagonal([10.0, 10.0].^2)
+
+    # Initialize the estimate of the state
+    x̂ = x₀
+    P̂ = P₀
+
+    last_update = time()
+    while true
+        sleep(0.001) # prevent thread from hogging resources & freezing other threads
+        isready(shutdown_channel) && break
+
+        fresh_gps_meas = []
+        while isready(gps_channel)
+            meas = take!(gps_channel)
+            push!(fresh_gps_meas, meas)
+        end
+        fresh_imu_meas = []
+        while isready(imu_channel)
+            meas = take!(imu_channel)
+            push!(fresh_imu_meas, meas)
+        end
+
+        while length(fresh_gps_meas) > 0 || length(fresh_imu_meas) > 0
+            if length(fresh_gps_meas) ≥ length(fresh_imu_meas)
+                meas = popfirst!(fresh_gps_meas)
+                z = [meas.lat; meas.long]
+                R = gps_variance
+            else
+                meas = popfirst!(fresh_imu_meas)
+                z = [meas.linear_vel ; meas.angular_vel]
+                R = imu_variance
+            end
+
+            Δ = meas.time - last_update
+
+            x̂, P̂ = ekf_step(z, x̂, P̂, Q, R, Δ)
+            last_update = meas.time
+
+            localization_state = LocalizationEstimate(time(), x̂[1:3], x̂[4:7], x̂[8:10], x̂[11:13])
+            if isready(localization_state_channel)
+                take!(localization_state_channel)
+            end
+            put!(localization_state_channel, localization_state)
+        end
+    end
+    @info "Terminated localization task."
 end
 
 function perception(cam_meas_channel, localization_state_channel, perception_state_channel, shutdown_channel)
@@ -409,6 +469,13 @@ function isfull(ch::Channel)
 	length(ch.data) ≥ ch.sz_max
 end
 
+function quaternion_to_euler(q)
+    yaw = atan(2*q[4]*q[3] + 2*q[1]*q[2], 1 - 2*q[2]^2 - 2*q[3]^2)
+    pitch = asin(2*q[4]*q[2] - 2*q[1]*q[3])
+    roll = atan(2*q[4]*q[1] + 2*q[2]*q[3], 1 - 2*q[1]^2 - 2*q[2]^2)
+    return (roll, pitch, yaw)
+end
+
 function test_algorithms(gt_channel,
 	localization_state_channel,
 	perception_state_channel,
@@ -497,7 +564,7 @@ function test_algorithms(gt_channel,
 				estimated_position = [vehicle.p1, vehicle.p2]
 				actual_position = paired_gt_vehicle.position[1:2]
 				#@info "Estimated size error: $(norm(actual_size-estimated_size))"
-				@info "Estimated position error " thing ": " $(norm(actual_position-estimated_position))"
+				@info "Estimated position error " thing ": " $(norm(actual_position-estimated_position))
 			end
 		end
 	end
@@ -546,73 +613,72 @@ function publish_socket_data_to_channels(socket, gps_channel, imu_channel, cam_c
 	@info "Terminated socket data publishing task."
 end
 
-function test_client(host::IPAddr = IPv4(0), port = 4444; v_step = 1.0, s_step = π / 10, use_keyboard = true)
-	socket = Sockets.connect(host, port)
-	(peer_host, peer_port) = getpeername(socket)
-	msg = deserialize(socket) # Visualization info
-	@info msg
+function test_client(host::IPAddr=IPv4(0), port=4444; v_step = 1.0, s_step = π/10, use_keyboard=true)
+    socket = Sockets.connect(host, port)
+    (peer_host, peer_port) = getpeername(socket)
+    msg = deserialize(socket) # Visualization info
+    @info msg
 
-	map_segments = training_map()
-	ego_vehicle_id = 1
+    map_segments = training_map()
+    ego_vehicle_id = 1
 
-	gps_channel = Channel{GPSMeasurement}(32)
-	imu_channel = Channel{IMUMeasurement}(32)
-	cam_channel = Channel{CameraMeasurement}(32)
-	gt_channel = Channel{GroundTruthMeasurement}(32)
-	target_road_segment_channel = Channel{Int}(1)
-	shutdown_channel = Channel{Bool}(1)
+    gps_channel = Channel{GPSMeasurement}(32)
+    imu_channel = Channel{IMUMeasurement}(32)
+    cam_channel = Channel{CameraMeasurement}(32)
+    gt_channel = Channel{GroundTruthMeasurement}(32)
+    target_road_segment_channel = Channel{Int}(1)
+    shutdown_channel = Channel{Bool}(1)
 
-	localization_state_channel = Channel{LocalizationEstimate}(1)
-	perception_state_channel = Channel{Percept}(1)
-	gt_localization_state_channel = Channel{LocalizationEstimate}(1)
+    localization_state_channel = Channel{LocalizationEstimate}(1)
+    perception_state_channel = Channel{Percept}(1)
 
-	# wrap worker threads in error monitor to print any errors
-	# does not raise an error though
-	# so we have to press q to quit and code below will handle killing worker threads
-	errormonitor(@async publish_socket_data_to_channels(socket, gps_channel, imu_channel, cam_channel, gt_channel, target_road_segment_channel, shutdown_channel))
-	errormonitor(@async localize(gps_channel, imu_channel, localization_state_channel, shutdown_channel))
-	errormonitor(@async perception(cam_channel, gt_localization_state_channel, perception_state_channel, shutdown_channel))
-	if !use_keyboard
-		# use gt channel instead of localization channel for testing purposes
-		errormonitor(@async decision_making(gt_channel, perception_state_channel, target_road_segment_channel, shutdown_channel, map_segments, socket))
-	end
-	errormonitor(@async test_algorithms(gt_channel, localization_state_channel, perception_state_channel, shutdown_channel, gt_localization_state_channel, ego_vehicle_id))
+    # wrap worker threads in error monitor to print any errors
+    # does not raise an error though
+    # so we have to press q to quit and code below will handle killing worker threads
+    errormonitor(@async publish_socket_data_to_channels(socket, gps_channel, imu_channel, cam_channel, gt_channel, target_road_segment_channel, shutdown_channel))
+    errormonitor(@async localize(map_segments, gps_channel, imu_channel, localization_state_channel, shutdown_channel))
+    # errormonitor(@asyc perception(cam_channel, localization_state_channel, perception_state_channel, shutdown_channel))
+    if !use_keyboard
+        # use gt channel instead of localization channel for testing purposes
+        errormonitor(@async decision_making(gt_channel, perception_state_channel, target_road_segment_channel, shutdown_channel, map_segments, socket))
+    end
+    errormonitor(@async test_algorithms(gt_channel, localization_state_channel, perception_state_channel, shutdown_channel, ego_vehicle_id))
 
-	target_velocity = 0.0
-	steering_angle = 0.0
-	controlled = true
-	@info "Press 'q' at any time to terminate vehicle."
-	while controlled && isopen(socket)
-		key = get_c()
-		if key == 'q'
-			# terminate vehicle
-			controlled = false
-			target_velocity = 0.0
-			steering_angle = 0.0
-			@info "Terminating test client and its worker threads"
-			# sends msg to workers threads to throw error so they die
-			# this lets us use Revise to handle code changes
-			put!(shutdown_channel, true)
-		elseif key == 'i'
-			# increase target velocity
-			target_velocity += v_step
-			@info "Target velocity: $target_velocity"
-		elseif key == 'k'
-			# decrease forward force
-			target_velocity -= v_step
-			@info "Target velocity: $target_velocity"
-		elseif key == 'j'
-			# increase steering angle
-			steering_angle += s_step
-			@info "Target steering angle: $steering_angle"
-		elseif key == 'l'
-			# decrease steering angle
-			steering_angle -= s_step
-			@info "Target steering angle: $steering_angle"
-		end
-		if use_keyboard
-			cmd = VehicleCommand(steering_angle, target_velocity, controlled)
-			serialize(socket, cmd)
-		end
-	end
+    target_velocity = 0.0
+    steering_angle = 0.0
+    controlled = true
+    @info "Press 'q' at any time to terminate vehicle."
+    while controlled && isopen(socket)
+        key = get_c()
+        if key == 'q'
+            # terminate vehicle
+            controlled = false
+            target_velocity = 0.0
+            steering_angle = 0.0
+            @info "Terminating test client and its worker threads"
+            # sends msg to workers threads to throw error so they die
+            # this lets us use Revise to handle code changes
+            put!(shutdown_channel, true)
+        elseif key == 'i'
+            # increase target velocity
+            target_velocity += v_step
+            @info "Target velocity: $target_velocity"
+        elseif key == 'k'
+            # decrease forward force
+            target_velocity -= v_step
+            @info "Target velocity: $target_velocity"
+        elseif key == 'j'
+            # increase steering angle
+            steering_angle += s_step
+            @info "Target steering angle: $steering_angle"
+        elseif key == 'l'
+            # decrease steering angle
+            steering_angle -= s_step
+            @info "Target steering angle: $steering_angle"
+        end
+        if use_keyboard
+            cmd = VehicleCommand(steering_angle, target_velocity, controlled)
+            serialize(socket, cmd)
+        end
+    end
 end
