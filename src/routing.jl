@@ -241,7 +241,7 @@ function find_side_of_road(position, current_road_id, map)
     end
 end
 
-function find_steering_angle_normal(current_road_id, map, side_of_road, dist_from_center_road, yaw)
+function find_steering_angle(current_road_id, map, side_of_road, dist_from_center_road, yaw)
     steering_angle = 0.0
     Kp = 0.08
     
@@ -367,5 +367,35 @@ function find_side_of_load_zone(position, current_road_id, map)
         return "right", dist_from_center
     else
         return "error", 0.0      
+    end
+end
+
+function get_stop_target_velocity(position, max_velocity, current_road_id, map)
+    start_to_slow_distance = 20.0
+    distance_to_stop = 0.0
+    road_length = 0.0
+    cur_road_seg = map[current_road_id]
+    if cur_road_seg.lane_boundaries[1].pt_a[1] == cur_road_seg.lane_boundaries[1].pt_b[1] #vertical road condition
+        road_length = abs(cur_road_seg.lane_boundaries[1].pt_a[2] - cur_road_seg.lane_boundaries[1].pt_b[2])
+        distance_to_stop = abs(position[2] - cur_road_seg.lane_boundaries[1].pt_b[2])
+        if distance_to_stop < start_to_slow_distance && distance_to_stop > 0.5
+            return max_velocity * distance_to_stop / start_to_slow_distance
+        elseif distance_to_stop < 0.5
+            return 5.0
+        else
+            return max_velocity
+        end
+    elseif cur_road_seg.lane_boundaries[1].pt_a[2] == cur_road_seg.lane_boundaries[1].pt_b[2] #horizontal road condition
+        road_length = abs(cur_road_seg.lane_boundaries[1].pt_a[1] - cur_road_seg.lane_boundaries[1].pt_b[1])
+        distance_to_stop = abs(position[1] - cur_road_seg.lane_boundaries[1].pt_b[1])
+        if distance_to_stop < start_to_slow_distance && distance_to_stop > 0.5
+            return max_velocity * distance_to_stop / start_to_slow_distance
+        elseif distance_to_stop < 0.5
+            return 5.0
+        else
+            return max_velocity
+        end
+    else
+        return 0.0
     end
 end

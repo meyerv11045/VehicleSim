@@ -181,7 +181,7 @@ function decision_making(localization_state_channel,
                         println("Center Position: $back_car_position_on_road")
                         println("Side of road: $position_on_road")
                         target_velocity = 3.0
-                        steering_angle = find_steering_angle_normal(cur_road_segment_id, map, position_on_road[1], position_on_road[2], yaw)
+                        steering_angle = find_steering_angle(cur_road_segment_id, map, position_on_road[1], position_on_road[2], yaw)
                         println("Steering Angle: $steering_angle")
                         cmd = VehicleCommand(steering_angle, target_velocity, controlled)
                         serialize(socket, cmd)
@@ -191,15 +191,19 @@ function decision_making(localization_state_channel,
                     serialize(socket, cmd)
                 else
                     position_on_road = find_side_of_road(position, cur_road_segment_id, map)
-                    if map[cur_road_segment_id].lane_boundaries[1].curvature != 0 #condition for curved roads
-                        target_velocity = 5.0
-                        steering_angle = find_steering_angle_normal(cur_road_segment_id, map, position_on_road[1], position_on_road[2], yaw)
-                    elseif cur_road_segment_id == start_road_id #condition for start road
+                    if cur_road_segment_id == start_road_id #condition for start road
                         target_velocity = 3.5
-                        steering_angle = find_steering_angle_normal(cur_road_segment_id, map, position_on_road[1], position_on_road[2], yaw)
+                        steering_angle = find_steering_angle(cur_road_segment_id, map, position_on_road[1], position_on_road[2], yaw)
+                    elseif map[cur_road_segment_id].lane_boundaries[1].curvature != 0 #condition for curved roads
+                        target_velocity = 5.0
+                        steering_angle = find_steering_angle(cur_road_segment_id, map, position_on_road[1], position_on_road[2], yaw)
+                    elseif map[cur_road_segment_id].lane_types[1] == VehicleSim.stop_sign && target_velocity > 0.5
+                        target_velocity = get_stop_target_velocity(position, 10.0, cur_road_segment_id, map)
+                        steering_angle = find_steering_angle(cur_road_segment_id, map, position_on_road[1], position_on_road[2], yaw)
+                        println("Target Velocity: $target_velocity")
                     else #condition for all other roads
                         target_velocity = 10.0 
-                        steering_angle = find_steering_angle_normal(cur_road_segment_id, map, position_on_road[1], position_on_road[2], yaw)
+                        steering_angle = find_steering_angle(cur_road_segment_id, map, position_on_road[1], position_on_road[2], yaw)
                     end
                 end
                 println("Side of road: $position_on_road")
