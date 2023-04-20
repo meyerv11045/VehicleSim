@@ -54,6 +54,19 @@ mutable struct RoadSegment
     children::Vector{Int}
 end
 
+function reached_target(pos, vel, seg)
+    @assert length(seg.lane_types) > 1 && seg.lane_types[2] == loading_zone
+    A = seg.lane_boundaries[2].pt_a
+    B = seg.lane_boundaries[2].pt_b
+    C = seg.lane_boundaries[3].pt_a
+    D = seg.lane_boundaries[3].pt_b
+    min_x = min(A[1], B[1], C[1], D[1])
+    max_x = max(A[1], B[1], C[1], D[1])
+    min_y = min(A[2], B[2], C[2], D[2])
+    max_y = max(A[2], B[2], C[2], D[2])
+    return min_x <= pos[1] <= max_x && min_y <= pos[2] <= max_y && abs(vel) < 0.1
+end
+
 """
 Assuming only 90° turns for now
 """
@@ -99,7 +112,7 @@ function generate_laneline_mesh(lb::LaneBoundary; res=1.0, width=0.3)
         pt_a_rel = pt_a - center
         pt_b_rel = pt_b - center
         θ0 = atan(pt_a_rel[2], pt_a_rel[1])
-        θT = atan(pt_b_rel[2], pt_b_rel[1]) 
+        θT = atan(pt_b_rel[2], pt_b_rel[1])
         Δθ = mod((θT - θ0) + π, 2π) - π
         dθ = sign(Δθ) * π/2.0 / N
         rad_1 = rad - width/2
@@ -112,7 +125,7 @@ function generate_laneline_mesh(lb::LaneBoundary; res=1.0, width=0.3)
     else
         dir = delta / norm(delta)
         right = [dir[2], -dir[1]]
-        points = mapreduce(vcat, t) do dist  
+        points = mapreduce(vcat, t) do dist
             pt_1 = pt_a+dir*dist-width/2*right
             pt_2 = pt_a+dir*dist+width/2*right
             [GeometryBasics.Point{3, Float64}(pt_1[1], pt_1[2], 0),
@@ -165,7 +178,7 @@ function generate_lane_mesh(lb1, lb2, lane_type; width=0.3, res=1.0)
         pt_a_rel = pt_a - center
         pt_b_rel = pt_b - center
         θ0 = atan(pt_a_rel[2], pt_a_rel[1])
-        θT = atan(pt_b_rel[2], pt_b_rel[1]) 
+        θT = atan(pt_b_rel[2], pt_b_rel[1])
         Δθ = mod((θT - θ0) + π, 2π) - π
         dθ = sign(Δθ) * π/2.0 / N
         rad_1 = rad
@@ -231,8 +244,24 @@ function generate_lane_mesh(lb1, lb2, lane_type; width=0.3, res=1.0)
     (; obj, obj_end)
 end
 
+function ground_mesh()
+    green=RGBA{Float32}(0.34,0.49,0.27,1.0)
+    points = GeometryBasics.Point{3,Float64}[]
+    for x in [-200.0, 200.0]
+        for y in [-200.0, 200.0]
+            push!(points, GeometryBasics.Point{3,Float64}(x,y,-0.25))
+        end
+    end
+    faces = [GeometryBasics.TriangleFace(1,2,3), GeometryBasics.TriangleFace(2,4,3)]
+    mesh = GeometryBasics.Mesh(points, faces)
+    obj = MeshCat.Object(mesh, MeshPhongMaterial(color=green))
+end
+
+
 function view_map(vis, all_segs)
     delete!(vis["Grid"])
+    gm = ground_mesh()
+    setobject!(vis["ground"], gm)
     for (id, seg) in all_segs
         meshes = generate_road_segment_mesh(seg)
         for (mesh_id, m) in meshes
@@ -264,10 +293,18 @@ function contains_lane_type(seg, types...)
     return any(lane_type ∈ types for lane_type in seg.lane_types)
 end
 
+function istaper(seg)
+    A = seg.lane_boundaries[2].pt_a
+    B = seg.lane_boundaries[2].pt_b
+    C = seg.lane_boundaries[3].pt_a
+    D = seg.lane_boundaries[3].pt_b
+    norm(A-C) < 0.1 || norm(B-D) < 0.1
+end
+
 function identify_loading_segments(map)
     target_segments = []
     for (id, seg) in map
-        if contains_lane_type(seg, loading_zone)
+        if contains_lane_type(seg, loading_zone) && !istaper(seg)
             push!(target_segments, id)
         end
     end
@@ -374,7 +411,7 @@ function add_segments!(all_segs, base, direction, segs)
 end
 
 function add_curved_segments!(all_segs, base, direction, turn_left; turn_curvature=0.1, speed_limit=7.5, lane_width=5.0)
-    
+
     if direction == west
         lane_dir = SVector(-1.0, 0)
     elseif direction == north
@@ -428,7 +465,7 @@ function add_curved_segments!(all_segs, base, direction, turn_left; turn_curvatu
     end
     all_segs[seg_1.id] = seg_1
     all_segs[seg_2.id] = seg_2
-    
+
     sinks = Dict{Direction, Vector{Int}}()
     origins = Dict{Direction, Vector{Int}}()
     origins[end_direction] = [seg_2.id,]
@@ -459,11 +496,11 @@ end
 function add_pullout_segments!(all_segs, base, direction; length=40.0, pullout_length=20.0, pullout_taper=5.0, lane_width = 5.0, speed_limit=7.5, pullout_inbound=false, pullout_outbound=false, stop_outbound=false, stop_inbound=false)
     end_lengths = (length - pullout_length - 2*pullout_taper) / 2.0
     base = add_straight_segments!(all_segs, base, direction; length=end_lengths, speed_limit, lane_width, stop_outbound=false, stop_inbound)
-    
+
     base = add_double_segments!(all_segs, base, direction; taper=1, length=pullout_taper, speed_limit, lane_width, pullout_inbound, pullout_outbound)
     base = add_double_segments!(all_segs, base, direction; taper=0, length=pullout_length, speed_limit, lane_width, pullout_inbound, pullout_outbound)
     base = add_double_segments!(all_segs, base, direction; taper=-1, length=pullout_taper, speed_limit, lane_width, pullout_inbound, pullout_outbound)
-    
+
     base = add_straight_segments!(all_segs, base, direction; length=end_lengths, speed_limit, lane_width, stop_outbound, stop_inbound=false)
 end
 
@@ -498,7 +535,7 @@ function add_double_segments!(all_segs, base, direction; taper=1, length=5.0, sp
     pt_d = pt_a + lane_dir * length
     pt_e = pt_b + lane_dir * length
     pt_f = pt_c + lane_dir * length
-    
+
     pt_a_l = pt_a - right_dir * lane_width
     pt_c_r = pt_c + right_dir * lane_width
     pt_d_l = pt_d - right_dir * lane_width
@@ -539,14 +576,14 @@ function add_double_segments!(all_segs, base, direction; taper=1, length=5.0, sp
         b2 = LaneBoundary(pt_d, pt_a, 0.0, true, true)
         seg_2 = RoadSegment(seg_id+=1, [b1, b2], [standard,], speed_limit, [])
     end
-    
+
     if !isnothing(base)
         seg_2.children = base.origins[direction]
         foreach(id->all_segs[id].children = [seg_1.id,], base.sinks[direction])
     end
     all_segs[seg_1.id] = seg_1
     all_segs[seg_2.id] = seg_2
-    
+
     sinks = Dict{Direction, Vector{Int}}()
     origins = Dict{Direction, Vector{Int}}()
     origins[direction] = [seg_2.id,]
@@ -582,7 +619,7 @@ function add_straight_segments!(all_segs, base, direction; length=40.0, speed_li
     pt_d = pt_a + lane_dir * length
     pt_e = pt_b + lane_dir * length
     pt_f = pt_c + lane_dir * length
-    
+
     seg_id = maximum(keys(all_segs); init=0)
 
     b1 = LaneBoundary(pt_b, pt_e, 0.0, true, true)
@@ -601,7 +638,7 @@ function add_straight_segments!(all_segs, base, direction; length=40.0, speed_li
     end
     all_segs[seg_1.id] = seg_1
     all_segs[seg_2.id] = seg_2
-    
+
     sinks = Dict{Direction, Vector{Int}}()
     origins = Dict{Direction, Vector{Int}}()
     origins[direction] = [seg_2.id,]
@@ -651,53 +688,53 @@ function add_fourway_intersection!(all_segs, base, direction; intersection_curva
     b2 = lane_boundary(pt_c, pt_j, true, false, true)
     seg_1 = RoadSegment(seg_id+=1, [b1, b2], [intersection,], speed_limit, [])
 
-    b1 = lane_boundary(pt_b, pt_h, true, false) 
-    b2 = lane_boundary(pt_c, pt_g, true, false) 
+    b1 = lane_boundary(pt_b, pt_h, true, false)
+    b2 = lane_boundary(pt_c, pt_g, true, false)
     seg_2 = RoadSegment(seg_id+=1, [b1, b2], [intersection,], speed_limit, [])
 
-    b1 = lane_boundary(pt_b, pt_e, true, false, false) 
-    b2 = lane_boundary(pt_c, pt_d, true, true, false) 
+    b1 = lane_boundary(pt_b, pt_e, true, false, false)
+    b2 = lane_boundary(pt_c, pt_d, true, true, false)
     seg_3 = RoadSegment(seg_id+=1, [b1, b2], [intersection,], speed_limit, [])
-   
+
     # East origins
     b1 = lane_boundary(pt_e, pt_b, true, false, true)
     b2 = lane_boundary(pt_f, pt_a, true, false, true)
     seg_4 = RoadSegment(seg_id+=1, [b1, b2], [intersection,], speed_limit, [])
 
-    b1 = lane_boundary(pt_e, pt_k, true, false) 
-    b2 = lane_boundary(pt_f, pt_j, true, false) 
+    b1 = lane_boundary(pt_e, pt_k, true, false)
+    b2 = lane_boundary(pt_f, pt_j, true, false)
     seg_5 = RoadSegment(seg_id+=1, [b1, b2], [intersection,], speed_limit, [])
 
-    b1 = lane_boundary(pt_e, pt_h, true, false, false) 
-    b2 = lane_boundary(pt_f, pt_g, true, true, false) 
+    b1 = lane_boundary(pt_e, pt_h, true, false, false)
+    b2 = lane_boundary(pt_f, pt_g, true, true, false)
     seg_6 = RoadSegment(seg_id+=1, [b1, b2], [intersection,], speed_limit, [])
-    
+
     # North origins
     b1 = lane_boundary(pt_h, pt_e, true, false, true)
     b2 = lane_boundary(pt_i, pt_d, true, false, true)
     seg_7 = RoadSegment(seg_id+=1, [b1, b2], [intersection,], speed_limit, [])
 
-    b1 = lane_boundary(pt_h, pt_b, true, false) 
-    b2 = lane_boundary(pt_i, pt_a, true, false) 
+    b1 = lane_boundary(pt_h, pt_b, true, false)
+    b2 = lane_boundary(pt_i, pt_a, true, false)
     seg_8 = RoadSegment(seg_id+=1, [b1, b2], [intersection,], speed_limit, [])
 
-    b1 = lane_boundary(pt_h, pt_k, true, false, false) 
-    b2 = lane_boundary(pt_i, pt_j, true, true, false) 
+    b1 = lane_boundary(pt_h, pt_k, true, false, false)
+    b2 = lane_boundary(pt_i, pt_j, true, true, false)
     seg_9 = RoadSegment(seg_id+=1, [b1, b2], [intersection,], speed_limit, [])
-    
+
     # West origins
     b1 = lane_boundary(pt_k, pt_h, true, false, true)
     b2 = lane_boundary(pt_l, pt_g, true, false, true)
     seg_10 = RoadSegment(seg_id+=1, [b1, b2], [intersection,], speed_limit, [])
 
-    b1 = lane_boundary(pt_k, pt_e, true, false) 
-    b2 = lane_boundary(pt_l, pt_d, true, false) 
+    b1 = lane_boundary(pt_k, pt_e, true, false)
+    b2 = lane_boundary(pt_l, pt_d, true, false)
     seg_11 = RoadSegment(seg_id+=1, [b1, b2], [intersection,], speed_limit, [])
 
-    b1 = lane_boundary(pt_k, pt_b, true, false, false) 
-    b2 = lane_boundary(pt_l, pt_a, true, true, false) 
+    b1 = lane_boundary(pt_k, pt_b, true, false, false)
+    b2 = lane_boundary(pt_l, pt_a, true, true, false)
     seg_12 = RoadSegment(seg_id+=1, [b1, b2], [intersection,], speed_limit, [])
-    
+
     foreach(seg->all_segs[seg.id]=seg, [seg_1, seg_2, seg_3, seg_4, seg_5, seg_6, seg_7, seg_8, seg_9, seg_10, seg_11, seg_12])
 
     sinks = Dict{Direction, Vector{Int}}()

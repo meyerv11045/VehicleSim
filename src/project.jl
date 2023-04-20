@@ -61,8 +61,7 @@ function localize(map, gps_channel, imu_channel, localization_state_channel, shu
     t = [-3.0, 1, 2.6] # gps sensor in reference to the body frame
     xy_gps_in_map = [init_gps_meas.lat, init_gps_meas.long]
 
-    road_id = cur_map_segment_of_vehicle(xy_gps_in_map, map)
-    θ = get_driving_dir_of_road_seg(road_id, map)
+    θ = init_gps_meas.heading
 
     # rotate from map frame to estimate of body's orientation in map frame
     R_3D = [cos(θ) -sin(θ) 0;
@@ -79,14 +78,6 @@ function localize(map, gps_channel, imu_channel, localization_state_channel, shu
 
     x₀[1:2] = xy_body_in_map
 
-    # for testing, if we want to init with correct gt pose
-    # init_pose = fetch(gt_channel) # throw away the first measurement
-    # init_gps = fetch(gps_channel)
-    # x₀[1:3] = init_pose.position
-    # x₀[4:7] = init_pose.orientation
-    # x₀[8:10] = init_pose.velocity
-    # x₀[11:13] = init_pose.angular_velocity
-
     init = ones(13)
     init[4:7] .= 0.001
     P₀ = Diagonal(init)  # Initial covariance (uncertainty)
@@ -97,7 +88,7 @@ function localize(map, gps_channel, imu_channel, localization_state_channel, shu
 
     # Measurement noise covariance (taken from the generator functions)
     imu_variance = Diagonal([0.1, 0.1, 0.1, 0.1, 0.1, 0.1].^2)
-    gps_variance = Diagonal([10.0, 10.0].^2)
+    gps_variance = Diagonal([10.0, 10.0, 1.0].^2)
 
     # Initialize the estimate of the state
     x̂ = x₀
@@ -122,7 +113,7 @@ function localize(map, gps_channel, imu_channel, localization_state_channel, shu
         while length(fresh_gps_meas) > 0 || length(fresh_imu_meas) > 0
             if length(fresh_gps_meas) ≥ length(fresh_imu_meas)
                 meas = popfirst!(fresh_gps_meas)
-                z = [meas.lat; meas.long]
+                z = [meas.lat; meas.long; meas.heading]
                 R = gps_variance
             else
                 meas = popfirst!(fresh_imu_meas)

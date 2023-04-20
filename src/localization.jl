@@ -1,39 +1,8 @@
 """ Process Model: p(xₖ | xₖ₋₁)
     Given the current state, returns the mean next state
 """
-function f(x, Δt)
-    position = x[1:3]
-    quaternion = x[4:7]
-    velocity = x[8:10]
-    angular_vel = x[11:13]
-
-    # quaternion update
-    r = angular_vel
-    mag = norm(r)
-
-    if mag < 1e-5
-        # prevent divide by zero -> NaNs
-        sᵣ = 1.0
-        vᵣ = zeros(3)
-    else
-        sᵣ = cos(mag*Δt / 2.0)
-        vᵣ = sin(mag*Δt / 2.0) * r/mag
-    end
-
-    sₙ = quaternion[1]
-    vₙ = quaternion[2:4]
-
-    R = Rot_from_quat(quaternion)
-
-    s = sₙ*sᵣ - vₙ'*vᵣ
-    v = sₙ*vᵣ+sᵣ*vₙ+vₙ×vᵣ
-
-    new_position = position + Δt * R * velocity
-    new_quaternion = [s; v]
-    return [new_position; new_quaternion; velocity; angular_vel]
-end
-
 function jac_fx(x, Δ)
+    # using process model from measurements.jl
     jacobian(state -> f(state, Δ), x)[1]
 end
 
@@ -52,15 +21,7 @@ end
 """
 function h(x, output_gps_measurement=true)
     if output_gps_measurement
-        # output in GPS frame
-        T_body_to_gps = get_gps_transform()
-        gps_loc_body = T_body_to_gps*[zeros(3); 1.0]
-
-        xyz_body = x[1:3]
-        q_body = x[4:7]
-        Tbody = get_body_transform(q_body, xyz_body)
-        xyz_gps = Tbody * [gps_loc_body; 1]
-        return xyz_gps[1:2]
+        return h_gps(x)
     else
         # output in IMU frame
         T_body_imu = get_differentiable_imu_transform()
@@ -83,7 +44,7 @@ function jac_hx(x, output_gps_measurement)
 end
 
 function ekf_step(z, x̂, P̂, Q, R, Δ=0.01)
-    is_gps_measurement = length(z) == 2
+    is_gps_measurement = length(z) == 3
 
     # Prediction step
     x̂ = f(x̂, Δ)
