@@ -471,12 +471,12 @@ function update_targets(target_channels, state_channels, target_segments, map)
             if reached_target(pos, vel, map[current_target])
                 scores[i] += 1
                 new_target = rand(setdiff(target_segments, current_target))
-		@info "Vehicle $i reached target! New target is $new_target"
-		for i = 1:length(target_channels)
-		    @info "Scores: team $i has $(scores[i]) successful pickup/dropoffs"
-		end
+                @info "Vehicle $i reached target! New target is $new_target"
+                for i = 1:length(target_channels)
+                    @info "Scores: team $i has $(scores[i]) successful pickup/dropoffs"
+                end
                 take!(target_channels[i])
-		put!(target_channels[i], new_target)
+                put!(target_channels[i], new_target)
             end
         end
     end

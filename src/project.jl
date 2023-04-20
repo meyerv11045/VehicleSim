@@ -410,9 +410,6 @@ function publish_socket_data_to_channels(socket, gps_channel, imu_channel, cam_c
         sleep(0.001) # prevent thread from hogging resources & freezing other threads
         isready(shutdown_channel) && break
 
-        # stand in until the server publishes target road segments
-        !isfull(target_road_segment_channel) && put!(target_road_segment_channel, 55)
-
         # read to end of the socket stream to ensure you
         # are looking at the latest messages
         local measurement_msg
@@ -428,6 +425,11 @@ function publish_socket_data_to_channels(socket, gps_channel, imu_channel, cam_c
         end
         !received && continue
 
+        if isfull(target_road_segment_channel)
+            take!(target_road_segment_channel)
+        end
+        put!(target_road_segment_channel, measurement_msg.target_segment)
+
         # publish measurements from socket to measurement channels
         # so they can be used in the worker threads
         for meas in measurement_msg.measurements
@@ -439,6 +441,12 @@ function publish_socket_data_to_channels(socket, gps_channel, imu_channel, cam_c
                 !isfull(cam_channel) && put!(cam_channel, meas)
             elseif meas isa GroundTruthMeasurement
                 !isfull(gt_channel) && put!(gt_channel, meas)
+            elseif meas isa Int
+                @info meas
+
+            else
+                @info typeof(meas)
+                @info meas
             end
         end
     end
