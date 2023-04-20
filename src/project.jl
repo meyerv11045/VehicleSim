@@ -117,6 +117,11 @@ function perception(cam_meas_channel, localization_state_channel, perception_sta
 	num_vehicles = 0
 	prev_bbs_and_states = Dict()
 	prev_bbs_and_covars = Dict()
+	initial_perception_state = Percept(time(), [])
+	if isready(perception_state_channel)
+		take!(perception_state_channel)
+	end
+	put!(perception_state_channel, initial_perception_state)
 	# set up stuff
 	while true
 		sleep(0.001) # prevent thread from hogging resources & freezing other threads
@@ -497,7 +502,7 @@ function test_algorithms(gt_channel,
 				estimated_position = [vehicle.p1, vehicle.p2]
 				actual_position = paired_gt_vehicle.position[1:2]
 				#@info "Estimated size error: $(norm(actual_size-estimated_size))"
-				@info "Estimated position error " thing ": " $(norm(actual_position-estimated_position))"
+				@info "Estimated position error $thing :  $(norm(actual_position-estimated_position))"
 			end
 		end
 	end
