@@ -117,13 +117,13 @@ function decision_making(localization_state_channel,
     map,
     socket)
     try
-        # targets = [79, 94] #test target road segments manually
+        targets = [79, 94] #test target road segments manually
         @info "Starting decision making task..."
         while true
             sleep(0.001) # prevent thread from hogging resources & freezing other threads
             isready(shutdown_channel) && break
 
-            target_road_segment_id = take!(target_road_segment_channel) #popfirst!(targets)
+            target_road_segment_id = popfirst!(targets) #fetch(target_road_segment_channel) 
             @info "Target road segment: $target_road_segment_id"
 
             localization_state = fetch(localization_state_channel)
@@ -334,6 +334,10 @@ function publish_socket_data_to_channels(socket, gps_channel, imu_channel, cam_c
         end
         !received && continue
 
+        if isfull(target_road_segment_channel)
+            take!(target_road_segment_channel)
+        end
+        put!(target_road_segment_channel, measurement_msg.target_segment)
         # publish measurements from socket to measurement channels
         # so they can be used in the worker threads
         for meas in measurement_msg.measurements

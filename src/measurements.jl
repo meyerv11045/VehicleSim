@@ -8,6 +8,7 @@ struct GPSMeasurement <: Measurement
     time::Float64
     lat::Float64
     long::Float64
+    heading::Float64
 end
 
 """

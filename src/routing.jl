@@ -128,7 +128,7 @@ function cur_map_segment_of_vehicle(position, map)
             end
         end
     end
-    return 0
+    return nothing
 end
 
 """
