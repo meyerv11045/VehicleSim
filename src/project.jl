@@ -77,9 +77,11 @@ function localize(map, gps_channel, imu_channel, localization_state_channel, shu
     xy_body_in_map = xy_gps_in_map - R_2D*t[1:2]
 
     x₀[1:2] = xy_body_in_map
+    x₀[3] = 2.65 # meters off ground from URDF
 
     init = ones(13)
     init[4:7] .= 0.001
+    init[3] = 0.00001
     P₀ = Diagonal(init)  # Initial covariance (uncertainty)
 
     # Process noise covariance
@@ -247,6 +249,15 @@ function test_algorithms(gt_channel,
     wait(gt_channel)
     first_est = true
     t = time()
+
+    n::UInt128 = 0
+    avg_xy_error = 0.0
+    avg_xyz_error = 0.0
+    avg_q_error = 0.0
+    avg_v_xy_error = 0.0
+    avg_v_error = 0.0
+    avg_ω_error = 0.0
+
     while true
         sleep(0.001) # prevent thread from hogging resources & freezing other threads
         isready(shutdown_channel) && break
@@ -267,41 +278,52 @@ function test_algorithms(gt_channel,
         if latest_est_ego_state.time < latest_gt_ego_state.time - 0.5
             @warn "Localization algorithm stale."
         else
-            estimated_xyz = latest_est_ego_state.position
-            true_xyz = latest_gt_ego_state.position
-
-            estimated_v = latest_est_ego_state.linear_vel
-            true_v = latest_gt_ego_state.velocity
-
-            estimated_q = latest_est_ego_state.quaternion
-            true_q = latest_gt_ego_state.orientation
-
-
-            position_error = norm(estimated_xyz[1:2] - true_xyz[1:2])
-            vel_error = norm(estimated_v[1:2] - true_v[1:2])
-
             t2 = time()
             if t2 - t > 2.5 || first_est
+                estimated_xyz = latest_est_ego_state.position
+                true_xyz = latest_gt_ego_state.position
+
+                estimated_v = latest_est_ego_state.linear_vel
+                true_v = latest_gt_ego_state.velocity
+
+                estimated_q = latest_est_ego_state.quaternion
+                true_q = latest_gt_ego_state.orientation
+
+                estimated_ω = latest_est_ego_state.angular_vel
+                true_ω = latest_gt_ego_state.angular_velocity
+
+                position_error = norm(estimated_xyz[1:2] - true_xyz[1:2])
+                xyz_error = norm(estimated_xyz - true_xyz)
+                vel_error = norm(estimated_v[1:2] - true_v[1:2])
+                v_xyz_error = norm(estimated_v - true_v)
+                orientation_error = norm(estimated_q - true_q)
+                ω_error = norm(estimated_ω - true_ω)
+
+                avg_xy_error = (n*avg_xy_error + position_error) / (n+1)
+                avg_xyz_error = (n*avg_xyz_error + xyz_error) / (n+1)
+                avg_q_error = (n*avg_q_error + orientation_error) / (n+1)
+                avg_v_xy_error = (n*avg_v_xy_error + vel_error) / (n+1)
+                avg_v_error = (n*avg_v_error + v_xyz_error) / (n+1)
+                avg_ω_error = (n*avg_ω_error + ω_error) / (n+1)
+                n += 1
+
                 @info "------------------------------"
                 @info @sprintf "Localization xy position error: %.3f" position_error
                 @info @sprintf "x: %.2f | %.2f" estimated_xyz[1] true_xyz[1]
                 @info @sprintf "y: %.2f | %.2f" estimated_xyz[2] true_xyz[2]
-                # @info "z: $(estimated_xyz[3]) | $(true_xyz[3])"
 
-                @info "orientation (est vs ground truth)"
+                @info @sprintf "Localization orientation error: %.3f" orientation_error
                 @info estimated_q
                 @info true_q
-                # @info @sprintf "Localization orientation error: %.3f" orientation_error
-                # @info @sprintf "roll: %.2f | %.2f" roll_e roll_t
-                # @info @sprintf "pitch: %.2f | %.2f" pitch_e pitch_t
-                # @info @sprintf "yaw: %.2f | %.2f" yaw_e yaw_t
 
                 @info @sprintf "Localization xy velocity error: %.3f" vel_error
                 @info @sprintf "v_x: %.2f | %.2f" estimated_v[1] true_v[1]
                 @info @sprintf "v_y: %.2f | %.2f" estimated_v[2] true_v[2]
-                # @info "v_z: $(estimated_v[3]) | $(true_v[3])"
 
-                # @info "estimated: $estimated_xyz | true: $true_xyz"
+                @info @sprintf "z: %.2f | %.2f" estimated_xyz[3] true_xyz[3]
+                @info @sprintf "v_z: %.2f | %.2f" estimated_v[3] true_v[3]
+
+                @info @sprintf "ω error: %.3f" ω_error
                 t = t2
                 first_est = false
             end
@@ -341,7 +363,14 @@ function test_algorithms(gt_channel,
         #     end
         # end
     end
+    @info "------------------------------"
     @info "Terminated testing task."
+    @info @sprintf "Avg localization xy position error: %.3f" avg_xy_error
+    @info @sprintf "Avg localization xyz position error: %.3f" avg_xyz_error
+    @info @sprintf "Avg localization orientation error: %.3f" avg_q_error
+    @info @sprintf "Avg localization xy velocity error: %.3f" avg_v_xy_error
+    @info @sprintf "Avg localization xyz velocity error: %.3f" avg_v_error
+    @info @sprintf "Avg localization angular velocity error: %.3f" avg_ω_error
 end
 
 function publish_socket_data_to_channels(socket, gps_channel, imu_channel, cam_channel, gt_channel, target_road_segment_channel, shutdown_channel)
